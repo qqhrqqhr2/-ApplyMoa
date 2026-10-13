@@ -801,6 +801,34 @@
     const fallback=controls(document).filter(button=>pattern.test(label(button)));
     return fallback.length===1?fallback:[];
   }
+  // Recruitment-area (지원분야/모집분야) dropdowns. Choose only when the answer is unambiguous:
+  // a single real option, or exactly one option whose text appears in the posting title.
+  const areaPattern=/모집\s*(분야|부문)|지원\s*(분야|부문)/;
+  const placeholderOption=option=>!option||option.disabled&&!option.value||!C.clean(option.value)||/선택해|선택하세요|선택\s*$|^-+$/.test(C.clean(option.textContent));
+  function areaSelects(form){
+    return form?all('select',form).filter(e=>(visible(e)||visible(e.parentElement))&&!e.disabled&&areaPattern.test(fieldLabel(e,form)+' '+text(e)+' '+text(e.parentElement?.parentElement))):[];
+  }
+  function areaChoice(select,job){
+    if(!placeholderOption(select.selectedOptions?.[0]))return null;
+    const real=[...select.options].filter(option=>!option.disabled&&!placeholderOption(option));
+    if(real.length===1)return real[0];
+    const title=C.normalize(job.title);
+    const matched=real.filter(option=>{const value=C.normalize(option.textContent);return value.length>=2&&title.includes(value);});
+    return matched.length===1?matched[0]:null;
+  }
+  function selectArea(job){
+    const form=findForm(job);
+    if(!form||!scopeIdentity(form,job))return {ok:false,reason:'지원분야를 선택할 지원 화면을 확인하지 못했습니다.'};
+    let changed=0;
+    for(const select of areaSelects(form)){
+      const option=areaChoice(select,job);if(!option)continue;
+      // React/Vue keep their own state, so use the native setter and fire the usual events.
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set.call(select,option.value);
+      select.dispatchEvent(new Event('input',{bubbles:true}));select.dispatchEvent(new Event('change',{bubbles:true}));
+      changed++;
+    }
+    return changed?{ok:true,changed}:{ok:false,reason:'지원분야 선택지가 여러 개라 직접 선택해 주세요.'};
+  }
   function probe(job) {
     const bad = blocker();
     const portfolio=portfolioInfo(job);
@@ -831,9 +859,10 @@
     const actualForm = submit[0]?.form || form?.closest("form") || form?.querySelector("form");
     const destination = submit[0]?.getAttribute("formaction") || actualForm?.getAttribute("action") || (submit[0]?.matches("a") ? submit[0].getAttribute("href") : "");
     const externalDestination = !!destination && !/^javascript:/i.test(destination) && C.siteOf(new URL(destination,location.href).href) !== site;
-    const snapshot = {blocked:bad || (externalDestination ? "다른 사이트로 제출하는 양식입니다. 직접 확인해 주세요." : ""), identity:!!form && scopeIdentity(form,job), form:!!form, terms, questions, missingFields:missingFields || areaMissing || portfolio.required&&!portfolio.ready, resumeSelected:resume.selected, submitUnique:submit.length === 1};
+    const canSelectArea = areaMissing && areaSelects(form).some(select=>!!areaChoice(select,job));
+    const snapshot = {blocked:bad || (externalDestination ? "다른 사이트로 제출하는 양식입니다. 직접 확인해 주세요." : ""), identity:!!form && scopeIdentity(form,job), form:!!form, terms, questions, areaMissing, missingFields:missingFields || portfolio.required&&!portfolio.ready, resumeSelected:resume.selected, submitUnique:submit.length === 1};
     const gate = C.guard(snapshot);
-    return {ok:true, success, already, detail, openAvailable:detail && primary.length > 0, form:!!form, gate, portfolioRequired:portfolio.required,portfolioReady:portfolio.ready,portfolioEditing:portfolio.editing,canSelectPortfolio:!!portfolio.checkboxes?.length, canCompleteResumeSelection:!!resumeSelectionDialog(job), canChooseResumeMethod:!!resumeMethodChoice(form), canSelectResume:!!resume.choice && !terms && !questions, url:location.href, ...snapshot};
+    return {ok:true, success, already, detail, openAvailable:detail && primary.length > 0, form:!!form, gate, portfolioRequired:portfolio.required,portfolioReady:portfolio.ready,portfolioEditing:portfolio.editing,canSelectPortfolio:!!portfolio.checkboxes?.length, canCompleteResumeSelection:!!resumeSelectionDialog(job), canChooseResumeMethod:!!resumeMethodChoice(form), canSelectResume:!!resume.choice && !terms && !questions, canSelectArea, url:location.href, ...snapshot};
   }
   function openApply(job) {
     const p = probe(job);
@@ -903,7 +932,7 @@
     }
     return {version:2,site,path:location.pathname,headingCount:all("h1,h2").filter(visible).length,jobLinkCount:jobLinks(document).filter(visible).length,formCount:all("form").filter(visible).length,buttonLabels:controls(document).map(label).filter(s=>/^(?:입사지원|지원하기|지원서\s*제출|지원\s*취소|지원\s*완료|이력서\s*(?:변경|수정)|파일\s*(?:추가|첨부)|다음(?:\s*페이지)?)$/.test(s)).slice(0,40),history,search,frames:all("iframe").map(e=>{try {const u=new URL(e.src,location.href);return C.siteOf(u.href)?u.origin+u.pathname:"다른 사이트";}catch(_){return "주소 없음";}})};
   }
-  const api = {collect,nextPage,prepareSearch,prepareHistory,historyPeriod,probe,openApply,selectResume,arm,submit,diagnostics,mainIdentity};
+  const api = {selectArea,collect,nextPage,prepareSearch,prepareHistory,historyPeriod,probe,openApply,selectResume,arm,submit,diagnostics,mainIdentity};
   globalThis.FWAContent = api;
   if (typeof chrome !== "undefined" && chrome.runtime?.onMessage) {
     chrome.runtime.onMessage.addListener((message, sender, respond) => {
@@ -939,6 +968,7 @@
         case "completeResumeSelection": result = completeResumeSelection(job); break;
         case "resumeMethod": result = selectResumeMethod(job); break;
         case "resume": result = selectResume(job); break;
+        case "area": result = selectArea(job); break;
         case "arm": result = arm(job,message.token); break;
         case "submit": result = submit(job,message.token); break;
         case "diagnostics": result = diagnostics(message.filters); break;

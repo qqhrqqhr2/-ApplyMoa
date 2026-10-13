@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "채용지원모아",
-  "version": "0.1.68",
+  "version": "0.1.69",
   "description": "사람인·잡코리아 채용공고 수집, 검색·지역 필터 및 기업당 한 공고 지원 도우미",
   "minimum_chrome_version": "116",
   "permissions": [

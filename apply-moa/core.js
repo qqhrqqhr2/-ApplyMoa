@@ -6,7 +6,7 @@
   "use strict";
   const searchBatchSize = 100;
   const searchPolicyVersion = 2;
-  const contentProtocol = 11;
+  const contentProtocol = 12;
   const companyOptions = [
     {key:'sme',label:'중소기업',saramin:'scale004',jobkorea:'15'},
     {key:'medium',label:'중견기업',saramin:'scale003',jobkorea:'4'},
@@ -305,7 +305,8 @@
     if (!snapshot.form) return {ok: false, reason: "등록 이력서 지원 양식을 확인할 수 없습니다."};
     if (snapshot.terms) return {ok: false, reason: "필수 동의 항목이 선택되지 않았습니다. 사이트에서 확인해 주세요."};
     if (snapshot.questions) return {ok: false, reason: "추가 질문 또는 작성할 항목이 있습니다."};
-    if (snapshot.missingFields) return {ok: false, reason: "필수 입력 또는 모집분야 선택이 필요합니다."};
+    if (snapshot.areaMissing) return {ok: false, reason: "지원분야(모집분야)를 사이트에서 직접 선택해 주세요. 선택지가 여러 개라 자동으로 고르지 않았습니다."};
+    if (snapshot.missingFields) return {ok: false, reason: "필수 입력 항목이 비어 있습니다. 사이트에서 확인해 주세요."};
     if (!snapshot.resumeSelected) return {ok: false, reason: "제출할 등록 이력서를 사이트에서 선택해 주세요."};
     if (!snapshot.submitUnique) return {ok: false, reason: "최종 지원 버튼을 하나로 확인할 수 없습니다."};
     return {ok: true, reason: "등록 이력서로 지원 가능"};

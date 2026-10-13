@@ -634,7 +634,7 @@
           const currentHits=await this.probes(job,ids);
           const popupHits=currentHits.filter(hit=>{const key=C.applicationPosting(hit.p.url)?.key;return key&&(key===job.key||this.applicationBindings.get(job.key)?.get(hit.id)===key);});
           hits=popupHits.length?popupHits:currentHits;
-          if(hits.some(hit=>hit.p.success||hit.p.already||hit.p.gate?.ok||hit.p.blocked||hit.p.form&&(hit.p.terms||hit.p.questions||hit.p.missingFields)))break;
+          if(hits.some(hit=>hit.p.success||hit.p.already||hit.p.gate?.ok||hit.p.blocked||hit.p.form&&(hit.p.terms||hit.p.questions||hit.p.missingFields||hit.p.areaMissing)))break;
           await this.delay(300);
         }while(Date.now()<until);
       }
@@ -692,12 +692,17 @@
           hit={...hit,p:await this.command(hit.id,'probe',{job},hit.frameId)};
         }
       }
-      if(job.site==='jobkorea'&&hit?.p.form&&!hit.p.gate?.ok&&!hit.p.blocked&&!hit.p.terms&&!hit.p.questions&&!hit.p.missingFields&&!hit.p.resumeSelected){
+      if(job.site==='jobkorea'&&hit?.p.form&&!hit.p.gate?.ok&&!hit.p.blocked&&!hit.p.terms&&!hit.p.questions&&!hit.p.missingFields&&!hit.p.areaMissing&&!hit.p.resumeSelected){
         run.reason='잡코리아 지원하기 화면 · 선택된 이력서 로딩 확인 중';await this.save();
         const until=Date.now()+6000;
-        while(Date.now()<until&&!hit.p.gate?.ok&&!hit.p.blocked&&!hit.p.terms&&!hit.p.questions&&!hit.p.missingFields){
+        while(Date.now()<until&&!hit.p.gate?.ok&&!hit.p.blocked&&!hit.p.terms&&!hit.p.questions&&!hit.p.missingFields&&!hit.p.areaMissing){
           await this.delay(300);hit={...hit,p:await this.command(hit.id,'probe',{job},hit.frameId)};
         }
+      }
+      if(hit?.p.canSelectArea){
+        run.reason='지원분야 자동 선택 중';await this.save();
+        const area=await this.command(hit.id,'area',{job},hit.frameId);
+        if(area.ok){const until=Date.now()+4000;do{await this.delay(300);hit={...hit,p:await this.command(hit.id,'probe',{job},hit.frameId)};}while(Date.now()<until&&hit.p.areaMissing&&!hit.p.blocked);}
       }
       if(hit?.p.canSelectResume) {
         const r=await this.command(hit.id,"resume",{job},hit.frameId);
