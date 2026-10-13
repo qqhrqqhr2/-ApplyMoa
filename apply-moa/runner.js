@@ -12,7 +12,6 @@
       this.frames = new Map();
       this.owned = new Set();
       this.persistChain = Promise.resolve();
-      this.workers = new Map();
       this.searchWorkers = new Map();
       this.applicationWorkers = new Map();
       this.historyWorkers = new Map();
@@ -47,7 +46,6 @@
         }
       });
       if (restoring && ["running","scanning"].includes(state.run?.status)) state.run.status = "paused";
-      if(restoring && state.workflow?.status==='running'){state.workflow.status='paused';state.workflow.reason='작업 화면이 닫혔습니다. 자동 실행을 다시 시작하거나 지원 결과를 확인해 주세요.';for(const run of Object.values(state.workflow.runs||{}))if(['running','scanning'].includes(run.status))run.status='paused';}
       for (const attempt of Object.values(state.attempts)) if (restoring && attempt.status === "submitting") {
         attempt.status = "unknown";
         attempt.reason = "작업 화면이 닫혔습니다. 지원 현황에서 결과를 확인해 주세요.";
@@ -55,11 +53,19 @@
       if(restoring&&state.run?.parallel&&state.run.status==='paused'){state.run.status='done';state.run.reason='작업 화면이 닫혀 동시 지원을 중단했습니다. 제출 결과를 확인하고 남은 공고를 다시 선택해 주세요.';for(const task of state.run.tasks||[])if(task.status==='running')task.status='stopped';}
       // Saved numeric tab IDs may be reused after Chrome restarts. Do not claim ownership.
     }
-    async save() {
-      const snapshot = JSON.parse(JSON.stringify(this.state));
+    save() {
       this.update();
-      this.persistChain = this.persistChain.then(()=>chrome.storage.local.set({fwaState:snapshot}));
-      return this.persistChain;
+      // One queued write serves every save() made before it starts; it snapshots the
+      // state when it runs, so it always includes the caller's changes. A failed write
+      // is reported to its callers but does not block later writes.
+      if(!this.pendingSave){
+        const write=this.persistChain.catch(()=>{}).then(()=>{
+          if(this.pendingSave===write)this.pendingSave=null;
+          return chrome.storage.local.set({fwaState:JSON.parse(JSON.stringify(this.state))});
+        });
+        this.pendingSave=write;this.persistChain=write;
+      }
+      return this.pendingSave;
     }
     log(message) {
       this.state.logs.unshift({time:new Date().toISOString(),message});
@@ -196,14 +202,15 @@
       if(!this.canCollectHistory())return;
       return Promise.allSettled(this.state.settings.sites.map(site=>this.scanHistory(site)));
     }
-    async scanSearchAll() {
+    async scanSearchAll(only) {
       if(this.active)return;
       if(!C.titleTerms(this.state.settings.keyword).length)throw new Error('검색어를 입력해 주세요.');
+      const sites=this.state.settings.sites.filter(site=>!only||only.includes(site));
+      if(!sites.length)return;
       this.batchBusy=true;this.cancelled=false;
-      this.state.run={status:'scanning',kind:'search',site:'all'};
+      this.state.run={status:'scanning',kind:'search',site:sites.length>1?'all':sites[0]};
       try{
         await this.save();
-        const sites=[...this.state.settings.sites];
         const reads=await Promise.allSettled(sites.map(site=>{
           let worker=this.searchWorkers.get(site);
           if(!worker){
@@ -240,8 +247,11 @@
           if(this.cancelled)break;
           const previous=this.state.scans[site];
           if(previous?.status==='ready'&&previous.keyword===this.state.settings.keyword)continue;
-          const terms=previous?.keyword===this.state.settings.keyword&&previous.filterKey===C.searchFilterKey(this.state.settings)?{...(previous.termScans||{})}:{};
+          const sameSearch=previous?.keyword===this.state.settings.keyword&&previous.filterKey===C.searchFilterKey(this.state.settings);
+          const terms=sameSearch?{...(previous.termScans||{})}:{};
           if(keywords.length===1&&previous&&!previous.termScans&&previous.keyword===keywords[0])terms[keywords[0]]=previous;
+          // Merged postings of every keyword read so far. Finished keywords keep only counts.
+          let collected=sameSearch||terms[keywords[0]]===previous?[...(previous?.jobs||[])]:[];
           for(let index=0;index<keywords.length;index++){
             if(this.cancelled)break;
             const keyword=keywords[index];
@@ -254,12 +264,14 @@
               if(scan?.status!=='paused'||!scan.retryableFailure||scan.needsRestart||this.cancelled)break;
               if(retry<2){this.log(C.sites[site].label+' · 일시적인 수집 오류, 자동 재시도 '+(retry+1)+' / 2');await this.delay(1500*(retry+1));}
             }
-            const failed=this.state.scans[site];
-
             terms[keyword]=this.state.scans[site];
             const metas=keywords.map(word=>terms[word]).filter(Boolean);
             const complete=keywords.every(word=>terms[word]?.status==='ready');
-            this.state.scans[site]={...terms[keyword],keyword:this.state.settings.keyword,termScans:{...terms},jobs:C.uniqueJobs(metas.flatMap(meta=>meta.jobs||[])),pages:metas.reduce((sum,meta)=>sum+(meta.pages||0),0),status:complete?'ready':terms[keyword]?.status==='paused'?'paused':'scanning',reason:complete?keywords.length+'개 검색어 수집 완료':keyword+' · '+(terms[keyword]?.reason||'수집 중')};
+            collected=C.uniqueJobs([...collected,...(terms[keyword]?.jobs||[])]);
+            // A paused keyword keeps its own list so it can resume; finished ones are compacted.
+            for(const word of keywords)if(terms[word]?.status==='ready'&&terms[word].jobs)terms[word]=C.compactScan({...terms[word]});
+            this.state.scans[site]={...terms[keyword],keyword:this.state.settings.keyword,termScans:{...terms},jobs:collected,pages:metas.reduce((sum,meta)=>sum+(meta.pages||0),0),status:complete?'ready':terms[keyword]?.status==='paused'?'paused':'scanning',reason:complete?keywords.length+'개 검색어 수집 완료':keyword+' · '+(terms[keyword]?.reason||'수집 중')};
+            delete this.state.scans[site].jobCount;
             await this.save();
             if(terms[keyword]?.status!=='ready')break;
           }
@@ -284,87 +296,6 @@
         }catch(error){return {tab,error,page:plan.page};}
       }));
       return reads.map((read,index)=>read.status==='fulfilled'?read.value:{page:plans[index].page,error:read.reason});
-    }
-    parallelWorkers() {
-      for(const site of this.state.settings.sites){
-        let worker=this.workers.get(site);
-        if(!worker){
-          worker=new Runner({...this.state,run:{status:'idle'}},()=>{},false);
-          worker.log=message=>this.log(message);
-          worker.check=()=>{this.check();if(worker.cancelled)throw new Error('사용자가 작업을 중지했습니다.');};
-          worker.save=async()=>{
-            this.state.jobs=C.uniqueJobs([...this.state.jobs.filter(j=>j.site!==site),...worker.state.jobs.filter(j=>j.site===site)]);
-            if(this.state.workflow)this.state.workflow.runs[site]=worker.state.run;
-            return this.save();
-          };
-          worker.acquire=async job=>{
-            const conflicts=()=>[...this.applyLocks.values()].some(other=>other.site!==site&&(other.job.key===job.key||C.identityKey(other.job)===C.identityKey(job)||C.companyKey(other.job.company)===C.companyKey(job.company)));
-            while(conflicts())await worker.delay(250);
-            worker.check();
-            if(this.jobs().find(j=>j.key===job.key)?.reason)return false;
-            this.applyLocks.set(job.key,{site,job});return true;
-          };
-          worker.release=job=>this.applyLocks.delete(job.key);
-          this.workers.set(site,worker);
-        }
-        worker.state={...this.state,jobs:this.state.jobs,run:this.state.workflow?.runs[site]||{status:'idle'}};
-        worker.cancelled=false;
-      }
-      return [...this.workers.entries()].filter(([site])=>this.state.settings.sites.includes(site));
-    }
-    async together(tasks) {
-      const results=await Promise.allSettled(tasks);
-      const failed=results.find(result=>result.status==='rejected');if(failed)throw failed.reason;
-    }
-    async automatic() {
-      if(this.active)return;
-      if(!C.clean(this.state.settings.keyword))throw new Error('검색어를 입력해 주세요.');
-      if(this.state.run.status==='paused'&&this.state.run.queue)throw new Error('진행 중인 선택 지원을 마치거나 중지한 뒤 전체 자동 실행을 시작해 주세요.');
-      this.batchBusy=true;this.cancelled=false;
-      this.state.settings.autoApply=true;
-      this.state.scans={};this.state.jobs=[];
-      this.state.workflow={status:'running',phase:'collect',stages:Object.fromEntries(this.state.settings.sites.map(site=>[site,'history'])),range:C.historyRange(),runs:{},reason:'두 사이트에서 최근 2개월 이력과 전체 공고를 동시에 수집합니다.'};
-      const workers=this.parallelWorkers();
-      try{
-        this.log('전체 자동 실행 · 두 사이트를 동시에 처리합니다.');await this.save();
-        await this.together(workers.map(async([site,worker])=>{
-          await worker.scan('history',site,{automatic:true,range:this.state.workflow.range});this.check();
-          this.state.workflow.stages[site]='search';await this.save();
-          await worker.scan('search',site);
-        }));
-        this.check();
-        if(!this.ready()){
-          const failures=this.state.settings.sites.flatMap(site=>[this.state.histories[site],this.state.scans[site]].filter(m=>m?.status==='paused').map(m=>`${C.sites[site].label}: ${m.reason}`));
-          throw new Error(failures.join(' / ')||'지원 이력 또는 공고의 전체 수집을 확인하지 못했습니다. 자동 실행을 다시 눌러 주세요.');
-        }
-        this.state.workflow.phase='apply';this.state.workflow.reason='두 사이트에서 조건에 맞는 공고에 동시에 지원합니다.';
-        const jobs=C.onePerCompany(this.jobs().filter(j=>j.eligible&&!this.state.attempts[j.key]));
-        for(const [,worker] of workers){worker.state.jobs=this.state.jobs;}
-        await this.save();
-        await this.together(workers.map(async([site,worker])=>{
-          const keys=jobs.filter(j=>j.site===site).map(j=>j.key);
-          if(keys.length)await worker.start(keys,false,true);
-          else{worker.state.run={status:'done',queue:[],index:0,tabs:[]};await worker.save();}
-        }));
-        this.check();this.finishAutomatic();
-      }catch(e){this.state.workflow.status='paused';this.state.workflow.reason=e.message;this.log(e.message);}
-      finally{this.batchBusy=false;await this.save();}
-    }
-    finishAutomatic() {
-      const paused=Object.values(this.state.workflow.runs).some(run=>run.status==='paused');
-      this.state.workflow.status=paused?'paused':'done';
-      this.state.workflow.reason=paused?'멈춘 사이트의 지원 화면 또는 결과를 확인해 주세요. 다른 사이트의 작업은 계속 진행했습니다.':'두 사이트의 자동 작업을 마쳤습니다. 추가 입력이 필요한 공고는 직접 확인으로 표시했습니다.';
-      this.log(this.state.workflow.reason);
-    }
-    async continueAutomatic() {
-      if(this.active)return;
-      if(!this.ready()||this.state.workflow?.phase!=='apply')throw new Error('전체 자동 실행을 다시 눌러 이력과 공고를 확인해 주세요.');
-      const workers=this.parallelWorkers().filter(([,worker])=>worker.state.run.status==='paused'&&!['unknown','submitting'].includes(this.state.attempts[worker.state.run.job?.key]?.status));
-      if(!workers.length)throw new Error('지원 현황에서 결과 불명 공고를 먼저 확인해 주세요.');
-      this.batchBusy=true;this.cancelled=false;this.state.workflow.status='running';
-      try{await this.together(workers.map(([,worker])=>worker.start([],true,true)));this.check();this.finishAutomatic();}
-      catch(e){this.state.workflow.status='paused';this.state.workflow.reason=e.message;}
-      finally{this.batchBusy=false;await this.save();}
     }
     async scan(kind,site,options={}) {
       if(this.busy) return;
@@ -760,7 +691,7 @@
       }
       if(!hit || !hit.p.gate?.ok){this.pause(job,"manual",hit?.p.gate?.reason || "지원 양식을 인식하지 못했습니다. 사이트에서 직접 확인해 주세요.",hit?.id||ids.at(-1),!!hit?.p.form&&!hit.p.blocked);return false;}
       const token=crypto.randomUUID();
-      const arm=await this.command(hit.id,"arm",{job,token,requireAttachment:false},hit.frameId);
+      const arm=await this.command(hit.id,"arm",{job,token},hit.frameId);
       if(!arm.ok){this.pause(job,"manual",arm.reason,hit.id);return false;}
       this.check();
       this.state.attempts[job.key]={job,status:"submitting",reason:"제출 결과 확인 중",at:new Date().toISOString(),tabId:hit.id,frameId:hit.frameId||0,token,applicationKey:this.applicationBindings.get(job.key)?.get(hit.id)};
@@ -846,7 +777,7 @@
         this.log(run.reason);await this.save();
       }
     }
-    async start(keys,resume=false,automatic=false) {
+    async start(keys,resume=false) {
       if(!resume&&this.state.settings.autoApply&&this.state.settings.applyConcurrency>1)return this.startParallel(keys);
       if(this.busy)return;
       if(!this.ready())throw new Error("두 사이트의 지원 이력 확인과 공고 수집을 먼저 완료해 주세요.");
@@ -858,7 +789,7 @@
           const byKey=new Map(this.state.jobs.map(job=>[job.key,job]));
           const queue=C.onePerCompany(requested.map(key=>byKey.get(key)).filter(Boolean)).map(job=>job.key);
           if(!queue.length)throw new Error("선택한 지원 대상이 없습니다.");
-          this.state.run={status:"running",queue,index:0,tabs:[],automatic};
+          this.state.run={status:"running",queue,index:0,tabs:[]};
         } else {
           const attempt=this.state.attempts[this.state.run.job?.key];
           if(attempt?.status==="unknown" || attempt?.status==="submitting")throw new Error("결과 불명 공고는 지원 현황에서 먼저 확인해야 합니다.");
@@ -878,16 +809,12 @@
             this.state.attempts[key]={job,status:"skipped",reason,at:new Date().toISOString()};run.index++;continue;
           }
           const isResume=resume && run.job?.key===key && run.tabs?.length;
-          if(this.acquire&&!await this.acquire(job)){
-            this.state.attempts[key]={job,status:'skipped',reason:this.jobs().find(j=>j.key===key)?.reason||'다른 사이트의 지원 결과로 제외',at:new Date().toISOString()};run.index++;await this.save();continue;
-          }
           let completed;
-          try{completed=await this.process(job,isResume);}finally{this.release?.(job);}
+          completed=await this.process(job,isResume);
           resume=false;
           await this.save();
           if(!completed){
             const attempt=this.state.attempts[key];
-            if(automatic&&attempt?.status==='manual'&&attempt.canContinue){run.status='running';run.tabs=[];run.job=null;run.index++;this.log(job.company+' · 추가 입력 공고는 직접 확인으로 남기고 계속합니다.');await this.save();if(run.index<run.queue.length)await this.delay(this.state.settings.delay*1000);continue;}
             if(!this.state.settings.autoApply)await this.focus(attempt?.tabId);break;
           }
           // Close only extension-created task tabs after a positively confirmed result.
@@ -919,7 +846,7 @@
     }
     async stop() {
       this.cancelled=true;
-      for(const worker of [...this.workers.values(),...this.searchWorkers.values(),...this.applicationWorkers.values(),...this.historyWorkers.values()])worker.cancelled=true;
+      for(const worker of [...this.searchWorkers.values(),...this.applicationWorkers.values(),...this.historyWorkers.values()])worker.cancelled=true;
       this.log("중지 요청 · 이미 제출한 지원은 취소하지 않습니다.");
       if(!this.active) {this.state.run={status:"idle"};await this.save();}
     }

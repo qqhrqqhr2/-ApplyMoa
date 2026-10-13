@@ -13,11 +13,13 @@
   state.settings.regions ||= [];
   state.settings.autoApply ||= false;
   state.settings.excludeAppliedCompanies = true;
-  state.settings.attachResume = false;
   await chrome.storage.local.remove(['fwaResume','fwaAIKeys','fwaAIModelCatalog']);
   state.settings.sites=["saramin","jobkorea"];
   const selected=new Set();
-  const runner=new FWARunner(state,render);
+  let renderQueued=false;
+  // Runner saves can fire several times per tick; draw once per batch.
+  const scheduleRender=()=>{if(renderQueued)return;renderQueued=true;setTimeout(()=>{renderQueued=false;render();},0);};
+  const runner=new FWARunner(state,scheduleRender);
   let renderedJobsSignature="";
   let jobListPage=1;
   const companyDisplayJobs=new Map();
@@ -93,7 +95,7 @@
       buttons.append(open,scan);card.append(top,desc,buttons);
       if(meta){
         const diagnostic=element("button","plain",meta.status==='paused'?"수집 오류 진단 저장":"화면 구조 진단 저장");diagnostic.disabled=runner.active;
-        diagnostic.addEventListener("click",wrap(async()=>{runner.cancelled=false;download(`지원이력_${C.sites[site].label}_진단.json`,await runner.diagnostics(site));}));card.append(diagnostic);
+        diagnostic.addEventListener("click",wrap(async()=>{runner.cancelled=false;download(`지원이력_${C.sites[site].label}_진단.json`,await runner.diagnostics(site));}));diagnostic.classList.add("diagnostic-button");buttons.append(diagnostic);
       }
       if(meta && ["review","ready"].includes(meta.status)){
         const check=element("label","check review");const input=element("input");input.type="checkbox";input.checked=!!meta.reviewed;input.disabled=runner.historyBusy(site)||runner.busy||runner.batchBusy;
@@ -142,13 +144,13 @@
       if(job.location){const location=element("span","job-location",job.location);location.title=job.location;line.append(location);}
       info.append(line);
       const site=element("td","site-label",C.sites[job.site].label);
-      const status=element("td");status.append(attempt?makeBadge(attempt.status):job.eligible?element("span","badge blue","지원 대상"):element("span","badge",job.reason));
-      if(attempt?.reason){status.title=attempt.reason;status.append(element("span","job-reason",attempt.reason));}
+      const status=element("td"),statusLine=element("div","status-line");status.append(statusLine);statusLine.append(attempt?makeBadge(attempt.status):job.eligible?element("span","badge blue","지원 대상"):element("span","badge",job.reason));
+      if(attempt?.reason){status.title=attempt.reason;statusLine.append(element("span","job-reason",attempt.reason));}
       if(attempt?.status==='manual'){
         const retry=element('button','secondary retry-job','다시 선택');
         retry.disabled=runner.active;
         retry.addEventListener('click',wrap(async()=>{await runner.resetManual([job.key]);selected.delete(job.key);renderedJobsSignature="";$('consent').checked=false;render();}));
-        status.append(retry);
+        statusLine.append(retry);
       }
       const registered=element("td","posted-date-col",job.postedDate||"—");registered.title=job.postedDate?"사이트에 표시된 공고 등록일":"공고 목록에 등록일이 표시되지 않았거나 아직 수집하지 않았습니다.";
       row.append(tick,info,registered,site,status);output.push(row);
@@ -198,7 +200,8 @@
       scan.addEventListener("click",wrap(async()=>{
         if(dirty())throw new Error("변경한 설정을 먼저 저장해 주세요.");
         if(m?.status==="ready"||m?.needsRestart){delete state.scans[site];state.jobs=state.jobs.filter(j=>j.site!==site);selected.clear();$("consent").checked=false;}
-        await runner.scan("search",site);
+        // Same keyword-by-keyword path as the two-site button, limited to this site.
+        await runner.scanSearchAll([site]);
       }));actions.append(scan);
       if(m?.status==="paused"){
         const diagnostic=element("button","plain","수집 오류 진단 저장");diagnostic.disabled=runner.active;
@@ -208,7 +211,7 @@
     });$("searchStatus").replaceChildren(...pills);
     const jobs=runner.jobs();
     for(const j of jobs)if(!j.eligible||(state.attempts[j.key]&&state.attempts[j.key].status!=='manual'))selected.delete(j.key);
-    const signature=JSON.stringify([jobs,state.attempts,runner.active,$("filter").value,$("viewFilter").value,jobListPage]);
+    const signature=JSON.stringify([jobs.map(j=>[j.key,j.reason,j.title,j.company,j.location,j.postedDate]),state.attempts,runner.active,$("filter").value,$("viewFilter").value,jobListPage]);
     if(signature!==renderedJobsSignature){rows(jobs);renderedJobsSignature=signature;}
     $("totalCount").textContent=jobs.length;$("eligibleCount").textContent=jobs.filter(j=>j.eligible&&(!state.attempts[j.key]||state.attempts[j.key].status==='manual')).length;$("excludedCount").textContent=jobs.filter(j=>!j.eligible).length;const summary=C.workCounts(state);$('doneCount').textContent=summary.current;$('allDoneCount').textContent=summary.total;$('resetWorkSummary').disabled=runner.active||settingsBusy;
     const locked=settingsBusy || runner.active || (state.run.status==="paused"&&!!state.run.queue);for(const id of ["keyword","excluded","companyTypes","employmentTypes","regions","delay","applyConcurrency","titleKeywords","excludedTitleTerms","saveSettings","scanAll"])$(id).disabled=locked;
@@ -244,6 +247,8 @@
         return item;
       }));
     }
+    // Avoid repeating the title as the description (e.g. "선택 목록 처리가 끝났습니다.").
+    $("runReason").hidden=C.clean($("runReason").textContent)===C.clean($("runTitle").textContent);
     const collapsed=!!state.ui.runPanelCollapsed;
     $('runPanel').classList.toggle('is-collapsed',collapsed);
     $('toggleRunPanel').textContent=collapsed?'펼치기':'접기';
@@ -254,15 +259,17 @@
     renderStart();
   }
   function download(name,data){const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:"application/json;charset=utf-8"}));const link=element("a");link.href=url;link.download=name;link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
-  function dirty(){return C.clean($("keyword").value)!==state.settings.keyword || JSON.stringify(C.companyList($("excluded").value))!==JSON.stringify(state.settings.excluded) || C.searchFilterKey(filters())!==C.searchFilterKey(state.settings) || JSON.stringify(C.normalizeRegions(values('regions')))!==JSON.stringify(state.settings.regions) || Number($("applyConcurrency").value)!==state.settings.applyConcurrency || Number($("delay").value)!==state.settings.delay || JSON.stringify(C.titleTerms($("excludedTitleTerms").value))!==JSON.stringify(state.settings.excludedTitleTerms) || JSON.stringify(C.titleTerms($("titleKeywords").value))!==JSON.stringify(state.settings.titleKeywords);}
+  function dirty(){return !C.sameKeywords($("keyword").value,state.settings.keyword) || JSON.stringify(C.companyList($("excluded").value))!==JSON.stringify(state.settings.excluded) || C.searchFilterKey(filters())!==C.searchFilterKey(state.settings) || JSON.stringify(C.normalizeRegions(values('regions')))!==JSON.stringify(state.settings.regions) || Number($("applyConcurrency").value)!==state.settings.applyConcurrency || Number($("delay").value)!==state.settings.delay || JSON.stringify(C.titleTerms($("excludedTitleTerms").value))!==JSON.stringify(state.settings.excludedTitleTerms) || JSON.stringify(C.titleTerms($("titleKeywords").value))!==JSON.stringify(state.settings.titleKeywords);}
   async function saveSettings(){
     if(settingsBusy||runner.active)throw new Error('현재 작업이 끝난 뒤 설정을 저장해 주세요.');
     settingsBusy=true;render();
     try{
-    const keyword=C.clean($("keyword").value);if(!keyword)throw new Error("검색어를 입력해 주세요.");
-    const searchChanged=keyword!==state.settings.keyword||C.searchFilterKey(filters())!==C.searchFilterKey(state.settings);
+    // Keep the stored text when the keyword list is unchanged so collected results stay valid.
+    const keywordChanged=!C.sameKeywords($("keyword").value,state.settings.keyword);
+    const keyword=keywordChanged?C.keywordText($("keyword").value):state.settings.keyword;if(!C.titleTerms(keyword).length)throw new Error("검색어를 입력해 주세요.");
+    const searchChanged=keywordChanged||C.searchFilterKey(filters())!==C.searchFilterKey(state.settings);
     if(searchChanged){state.jobs=[];state.scans={};selected.clear();$("consent").checked=false;}
-    state.settings={...state.settings,...filters(),keyword,titleKeywords:C.titleTerms($("titleKeywords").value),excludedTitleTerms:C.titleTerms($("excludedTitleTerms").value),excluded:C.companyList($("excluded").value),regions:C.normalizeRegions(values('regions')),applyConcurrency:Math.max(1,Math.min(5,Number($("applyConcurrency").value)||1)),delay:Math.max(6,Number($("delay").value)||6),attachResume:false,excludeAppliedCompanies:true};
+    state.settings={...state.settings,...filters(),keyword,titleKeywords:C.titleTerms($("titleKeywords").value),excludedTitleTerms:C.titleTerms($("excludedTitleTerms").value),excluded:C.companyList($("excluded").value),regions:C.normalizeRegions(values('regions')),applyConcurrency:Math.max(1,Math.min(5,Number($("applyConcurrency").value)||1)),delay:Math.max(6,Number($("delay").value)||6),excludeAppliedCompanies:true};
     $("excluded").value=state.settings.excluded.join("\n");
     $("excludedTitleTerms").value=state.settings.excludedTitleTerms.join(", ");
     runner.log("설정을 저장했습니다.");await runner.save();

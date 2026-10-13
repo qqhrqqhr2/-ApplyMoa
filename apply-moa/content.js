@@ -23,7 +23,6 @@
   const documentToken = Math.random().toString(36).slice(2);
   let historyPreparation = null;
   let searchSelection = C.searchFilters();
-  let attachmentReceipt = null;
 
   function blocker() {
     const b = text(document.body);
@@ -741,7 +740,7 @@
   }
   function formStamp(scope) {
     // Only a hash is kept in memory; form contents are never exported.
-    const state = text(scope) + all('input[type="radio"],input[type="checkbox"],select',scope).map(e => e.name+":"+e.value+":"+e.checked).join("|")+all('input[type="file"]',scope).map(e=>[...e.files||[]].map(file=>file.name+':'+file.size+':'+file.lastModified).join('|')).join('|')+(attachmentReceipt?.form===scope?attachmentReceipt.id:'');
+    const state = text(scope) + all('input[type="radio"],input[type="checkbox"],select',scope).map(e => e.name+":"+e.value+":"+e.checked).join("|")+all('input[type="file"]',scope).map(e=>[...e.files||[]].map(file=>file.name+':'+file.size+':'+file.lastModified).join('|')).join('|');
     let hash = 2166136261;
     for (let i=0;i<state.length;i++) hash = Math.imul(hash ^ state.charCodeAt(i),16777619);
     return hash >>> 0;
@@ -830,66 +829,9 @@
     const actualForm = submit[0]?.form || form?.closest("form") || form?.querySelector("form");
     const destination = submit[0]?.getAttribute("formaction") || actualForm?.getAttribute("action") || (submit[0]?.matches("a") ? submit[0].getAttribute("href") : "");
     const externalDestination = !!destination && !/^javascript:/i.test(destination) && C.siteOf(new URL(destination,location.href).href) !== site;
-    const fileResume=attachmentReady(job,form)&&attachmentReceipt.resumeField&&!resume.registeredRequired;
-    const snapshot = {blocked:bad || (externalDestination ? "다른 사이트로 제출하는 양식입니다. 직접 확인해 주세요." : ""), identity:!!form && scopeIdentity(form,job), form:!!form, terms, questions, missingFields:missingFields || areaMissing || portfolio.required&&!portfolio.ready, resumeSelected:resume.selected||fileResume, submitUnique:submit.length === 1};
+    const snapshot = {blocked:bad || (externalDestination ? "다른 사이트로 제출하는 양식입니다. 직접 확인해 주세요." : ""), identity:!!form && scopeIdentity(form,job), form:!!form, terms, questions, missingFields:missingFields || areaMissing || portfolio.required&&!portfolio.ready, resumeSelected:resume.selected, submitUnique:submit.length === 1};
     const gate = C.guard(snapshot);
-    return {ok:true, success, already, detail, openAvailable:detail && primary.length > 0, form:!!form, gate, portfolioRequired:portfolio.required,portfolioReady:portfolio.ready,portfolioEditing:portfolio.editing,canSelectPortfolio:!!portfolio.checkboxes?.length, canCompleteResumeSelection:!!resumeSelectionDialog(job), canChooseResumeMethod:!!resumeMethodChoice(form), canSelectResume:!!resume.choice && !terms && !questions, fileAttached:attachmentReady(job,form), url:location.href, ...snapshot};
-  }
-  function attachmentReady(job,form){
-    if(!form||attachmentReceipt?.key!==job.key||attachmentReceipt.form!==form)return false;
-    if(attachmentReceipt.input?.isConnected&&attachmentReceipt.input.files?.length&&([...attachmentReceipt.input.files].length!==1||attachmentReceipt.input.files[0]!==attachmentReceipt.file))return false;
-    if(!text(form).includes(attachmentReceipt.name)||/업로드\s*실패|첨부\s*실패|파일\s*오류/.test(text(form)))return false;
-    return !all('[role="progressbar"],.uploading,.upload_progress',form).some(visible);
-  }
-  async function attachResume(job,record){
-    const initial=probe(job),form=findForm(job);
-    if(initial.blocked||!form||!scopeIdentity(form,job))return {ok:false,reason:initial.blocked||'파일을 첨부할 지원 양식을 확인할 수 없습니다.'};
-    if(!record||!record.name||!record.size||record.size>4*1024*1024||!/^[a-f0-9]{64}$/.test(record.id)||!['application/pdf','application/msword','application/vnd.openxmlformats-officedocument.wordprocessingml.document','text/plain'].includes(record.type))return {ok:false,reason:'등록한 이력서 파일을 확인할 수 없습니다.'};
-    if(attachmentReceipt?.id===record.id&&attachmentReady(job,form))return {ok:true,id:record.id};
-    if(text(form).includes(record.name))return {ok:false,reason:'같은 이름의 첨부파일이 이미 있어 새 파일과 구별할 수 없습니다. 사이트에서 확인하거나 파일 이름을 바꿔 등록해 주세요.'};
-    const inputs=()=>all('input[type="file"]',form).filter(input=>!input.disabled&&/이력서|첨부\s*파일|파일\s*첨부|resume|attach/i.test(fieldLabel(input,form)+' '+input.name+' '+input.id)&&!/포트폴리오|증명서|자격증/.test(fieldLabel(input,form)));
-    if(!inputs().length){
-      const buttons=controls(form).filter(button=>/^(?:파일\s*(?:추가|첨부)|이력서\s*첨부|첨부파일\s*추가)$/.test(label(button)));
-      if(buttons.length===1){buttons[0].click();await waitFor(()=>inputs().length>0,2000);}
-    }
-    const fields=inputs();if(fields.length!==1)return {ok:false,reason:'이력서 파일 첨부 칸을 하나로 확인하지 못했습니다. 사이트에서 파일을 직접 첨부해 주세요.'};
-    const input=fields[0],extension='.'+record.name.split('.').at(-1).toLowerCase();
-    const accepted=input.accept.toLowerCase().split(',').map(value=>value.trim()).filter(Boolean);
-    if(accepted.length&&!accepted.includes(extension)&&!accepted.includes(record.type)&&!accepted.includes('*/*')&&!accepted.includes(record.type.split('/')[0]+'/*'))return {ok:false,reason:'이 공고의 첨부 칸은 등록한 이력서 형식을 허용하지 않습니다.'};
-    let bytes;try{bytes=Uint8Array.from(atob(record.data),character=>character.charCodeAt(0));}catch(_){return {ok:false,reason:'이력서 파일 내용을 읽을 수 없습니다.'};}
-    if(bytes.length!==record.size)return {ok:false,reason:'등록한 이력서 파일 크기가 다릅니다.'};
-    const digest=[...new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))].map(byte=>byte.toString(16).padStart(2,'0')).join('');
-    if(digest!==record.id)return {ok:false,reason:'등록한 이력서 파일이 변경되었습니다.'};
-    const transfer=new DataTransfer();transfer.items.add(new File([bytes],record.name,{type:record.type,lastModified:record.lastModified}));
-    attachmentReceipt=null;input.files=transfer.files;input.dispatchEvent(new Event('input',{bubbles:true}));input.dispatchEvent(new Event('change',{bubbles:true}));
-    const candidate={key:job.key,form,input,file:input.files[0],id:record.id,name:record.name,resumeField:/이력서|resume/i.test(fieldLabel(input,form)+' '+input.name)};
-    const confirmed=await waitFor(()=>{
-      if(findForm(job)!==form||blocker()||/업로드\s*실패|첨부\s*실패|파일\s*오류/.test(text(form)))return false;
-      return text(form).includes(record.name)&&!all('[role="progressbar"],.uploading,.upload_progress',form).some(visible);
-    },20000);
-    if(!confirmed)return {ok:false,reason:'이력서 파일의 업로드 완료 표시를 확인하지 못했습니다. 사이트에서 직접 확인해 주세요.'};
-    attachmentReceipt=candidate;return {ok:true,id:record.id};
-  }
-  function postingDescription(job){
-    const bad=blocker();if(bad)return {ok:false,reason:bad};
-    if(!mainIdentity(job))return {ok:false,reason:'AI 분석할 회사와 공고를 확인할 수 없습니다.'};
-    const selectors=site==='saramin'?'.jv_cont,.jv_detail,.user_content':'[data-sentry-component="RecruitContent"],[data-jobview-section="description"],.recruitment-section,.jobview-content,.recruit-info,.artReadJobSum,.tbDetail';
-    const sections=all(selectors).filter(visible).filter(element=>!element.closest('form,[role="dialog"]'));
-    let frameLoading=false;
-    const roots=sections.filter(element=>!sections.some(parent=>parent!==element&&parent.contains(element)));
-    for(const section of sections)for(const frame of all('iframe[src]',section)){
-      try{
-        const url=new URL(frame.src,location.href),ids=[...url.searchParams].filter(([name])=>site==='saramin'?name==='rec_idx':/^(?:gino|gi_no|gno)$/i.test(name));
-        if(url.origin!==location.origin||C.siteOf(url.href)!==site||ids.length!==1||ids[0][1]!==job.id)continue;
-        const document=frame.contentDocument;if(document?.readyState!=='complete'){frameLoading=true;continue;}
-        if(document.body&&!document.body.querySelector('input[type="password"]'))roots.push(document.body);
-      }catch(_){/* Frames outside the verified first-party posting are not read. */}
-    }
-    const pieces=roots.map(element=>{
-      const clone=element.cloneNode(true);all('form,script,style,input,textarea,select,nav,button,[contenteditable]',clone).forEach(child=>child.remove());return C.clean(clone.textContent);
-    });
-    const description=[...new Set(pieces.filter(Boolean))].join('\n').slice(0,14000);
-    return description.length>=120?{ok:true,description}:{ok:false,retryable:frameLoading,reason:'공고 상세 텍스트를 읽지 못했습니다. 이미지 공고는 직접 확인해 주세요.'};
+    return {ok:true, success, already, detail, openAvailable:detail && primary.length > 0, form:!!form, gate, portfolioRequired:portfolio.required,portfolioReady:portfolio.ready,portfolioEditing:portfolio.editing,canSelectPortfolio:!!portfolio.checkboxes?.length, canCompleteResumeSelection:!!resumeSelectionDialog(job), canChooseResumeMethod:!!resumeMethodChoice(form), canSelectResume:!!resume.choice && !terms && !questions, url:location.href, ...snapshot};
   }
   function openApply(job) {
     const p = probe(job);
@@ -910,12 +852,11 @@
     resumeInfo(findForm(job)).choice.click();
     return {ok:true};
   }
-  function arm(job, token, requireAttachment=false) {
+  function arm(job, token) {
     const p = probe(job);
     if (!p.gate.ok) return {ok:false,reason:p.gate.reason};
     const form = findForm(job);
-    if(requireAttachment&&!attachmentReady(job,form))return {ok:false,reason:'등록한 이력서의 첨부 완료를 확인하지 못했습니다.'};
-    pagePermit = {key:job.key, token, time:Date.now(), form, button:submitButtons(form)[0], stamp:formStamp(form),requireAttachment};
+    pagePermit = {key:job.key, token, time:Date.now(), form, button:submitButtons(form)[0], stamp:formStamp(form)};
     return {ok:true};
   }
   function submit(job, token) {
@@ -923,7 +864,7 @@
     const p = probe(job);
     const form = findForm(job);
     const button = form && submitButtons(form)[0];
-    if (!pagePermit || pagePermit.token !== token || pagePermit.key !== job.key || Date.now()-pagePermit.time > 15000 || pagePermit.form !== form || pagePermit.button !== button || !p.gate.ok || pagePermit.stamp !== formStamp(form) || pagePermit.requireAttachment&&!attachmentReady(job,form)) {
+    if (!pagePermit || pagePermit.token !== token || pagePermit.key !== job.key || Date.now()-pagePermit.time > 15000 || pagePermit.form !== form || pagePermit.button !== button || !p.gate.ok || pagePermit.stamp !== formStamp(form)) {
       return {ok:false,reason:!p.gate.ok ? p.gate.reason : "지원 화면이나 선택된 서류가 바뀌었습니다. 다시 확인해 주세요."};
     }
     spentPermit = token;
@@ -960,7 +901,7 @@
     }
     return {version:2,site,path:location.pathname,headingCount:all("h1,h2").filter(visible).length,jobLinkCount:jobLinks(document).filter(visible).length,formCount:all("form").filter(visible).length,buttonLabels:controls(document).map(label).filter(s=>/^(?:입사지원|지원하기|지원서\s*제출|지원\s*취소|지원\s*완료|이력서\s*(?:변경|수정)|파일\s*(?:추가|첨부)|다음(?:\s*페이지)?)$/.test(s)).slice(0,40),history,search,frames:all("iframe").map(e=>{try {const u=new URL(e.src,location.href);return C.siteOf(u.href)?u.origin+u.pathname:"다른 사이트";}catch(_){return "주소 없음";}})};
   }
-  const api = {collect,nextPage,prepareSearch,prepareHistory,historyPeriod,probe,openApply,selectResume,attachResume,postingDescription,arm,submit,diagnostics,mainIdentity};
+  const api = {collect,nextPage,prepareSearch,prepareHistory,historyPeriod,probe,openApply,selectResume,arm,submit,diagnostics,mainIdentity};
   globalThis.FWAContent = api;
   if (typeof chrome !== "undefined" && chrome.runtime?.onMessage) {
     chrome.runtime.onMessage.addListener((message, sender, respond) => {
@@ -996,9 +937,7 @@
         case "completeResumeSelection": result = completeResumeSelection(job); break;
         case "resumeMethod": result = selectResumeMethod(job); break;
         case "resume": result = selectResume(job); break;
-        case "attachResume": result = attachResume(job,message.record); break;
-        case "description": result = postingDescription(job); break;
-        case "arm": result = arm(job,message.token,!!message.requireAttachment); break;
+        case "arm": result = arm(job,message.token); break;
         case "submit": result = submit(job,message.token); break;
         case "diagnostics": result = diagnostics(message.filters); break;
         default: result = {ok:false,reason:"지원하지 않는 작업입니다."};

@@ -97,7 +97,7 @@ header p { font-size: 13px; }
 .site-top .badge, .search-top .badge { margin-left: auto; }
 .site-symbol { padding: 5px 8px; border-radius: 6px; background: #e9efff; color: #315cd4; font-size: 11px; font-weight: 750; }
 .site-symbol.jk { background: #e3f3fc; color: #086f9e; }
-.site-description { min-height: 38px; margin: 12px 0 14px; font-size: 12px; overflow-wrap: anywhere; flex: 1; }
+.site-description { min-height: 38px; margin: 12px 0 14px; font-size: 12px; overflow-wrap: anywhere; white-space: pre-line; flex: 1; }
 .site-buttons, .search-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .site-buttons button, .search-actions button { min-height: 35px; padding: 7px 11px; font-size: 12px; }
 .search-top > span:not(.badge) { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
@@ -239,3 +239,8 @@ footer { margin-top: 22px; text-align: center; font-size: 12px; color: var(--mut
 .parallel-tasks{margin-top:12px;max-height:220px;overflow:auto;border-top:1px solid var(--border)}.parallel-task{display:flex;align-items:center;gap:8px;padding:9px 0;border-bottom:1px solid var(--border);font-size:12px}.parallel-task strong{margin:0;font-size:12px;flex:0 0 140px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.parallel-task-reason{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}.parallel-task button{min-height:30px;padding:4px 8px;font-size:11px}.run-panel:has(.parallel-tasks:not([hidden])){align-items:flex-start}.run-panel:has(.parallel-tasks:not([hidden])) .run-actions{flex-shrink:0}@media(max-width:620px){.settings-actions{flex-wrap:wrap}.parallel-task{flex-wrap:wrap}.parallel-task-reason{flex-basis:100%}}
 
 .run-panel.is-collapsed{padding:11px 16px;align-items:center;gap:12px}.run-panel.is-collapsed>div:first-child{display:flex;align-items:center;gap:10px}.run-panel.is-collapsed #runTitle{margin:0;min-width:0;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.run-panel.is-collapsed #runReason,.run-panel.is-collapsed #parallelTasks,.run-panel.is-collapsed .run-actions>button:not(#toggleRunPanel):not(#stop){display:none!important}.run-panel.is-collapsed .run-actions{max-width:none;flex-wrap:nowrap;flex-shrink:0}.run-panel.is-collapsed .run-actions button{min-height:32px;padding:5px 10px}.run-panel.is-collapsed:has(.parallel-tasks:not([hidden])){align-items:center}@media(max-width:900px){.run-panel.is-collapsed{flex-direction:row}.run-panel.is-collapsed>div:first-child{min-width:0}}
+/* Status cell: badge, reason and retry button share one line without clipping. */
+.status-line { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.status-line .badge, .status-line .retry-job { flex-shrink: 0; margin-left: 0; }
+.status-line .job-reason { flex: 1 1 auto; min-width: 0; max-width: none; margin-left: 0; }
+.site-buttons .diagnostic-button { margin-left: auto; color: #7a8aa3; font-weight: 600; }

@@ -6,7 +6,7 @@
   "use strict";
   const searchBatchSize = 100;
   const searchPolicyVersion = 2;
-  const contentProtocol = 9;
+  const contentProtocol = 10;
   const companyOptions = [
     {key:'sme',label:'중소기업',saramin:'scale004',jobkorea:'15'},
     {key:'medium',label:'중견기업',saramin:'scale003',jobkorea:'4'},
@@ -175,6 +175,11 @@
     }
     for(const key of Object.keys(state.settings))if(key.startsWith('ai')||key==='resumeMeta')delete state.settings[key];
     delete state.ai;
+    // The one-click automatic workflow was removed from the UI.
+    delete state.workflow;
+    delete state.settings.attachResume;
+    // Completed per-keyword scans only need their counts; the merged list lives in scans[site].jobs.
+    for(const search of Object.values(state.scans||{}))for(const term of Object.values(search?.termScans||{}))if(term?.status==='ready')compactScan(term);
     for(const job of state.jobs||[])for(const key of ['aiScore','aiReason','aiExplanation'])delete job[key];
     state.settings.excludedTitleTerms ??= [];
     if ((state.version || 1) < 7) {
@@ -188,6 +193,12 @@
     if(!state.workSummary||!Array.isArray(state.workSummary.baselineCompletedKeys))resetWorkSummary(state);
     state.version = 7;
     return state;
+  }
+  function compactScan(meta){
+    if(!meta||!Array.isArray(meta.jobs))return meta;
+    meta.jobCount=meta.jobs.length;
+    delete meta.jobs;delete meta.seen;
+    return meta;
   }
   function regionKey(value) {
     const mapped=clean(value).normalize("NFKC").replace(/서울특별시/g,"서울").replace(/부산광역시/g,"부산").replace(/대구광역시/g,"대구").replace(/인천광역시/g,"인천").replace(/광주광역시/g,"광주").replace(/대전광역시/g,"대전").replace(/울산광역시/g,"울산").replace(/세종특별자치시/g,"세종").replace(/경기도/g,"경기").replace(/강원특별자치도|강원도/g,"강원").replace(/충청북도/g,"충북").replace(/충청남도/g,"충남").replace(/전북특별자치도|전라북도/g,"전북").replace(/전라남도/g,"전남").replace(/경상북도/g,"경북").replace(/경상남도/g,"경남").replace(/제주특별자치도|제주도/g,"제주");
@@ -228,8 +239,12 @@
   }
   function titleTerms(value){
     const seen=new Set();
-    return String(value||'').split(/[,;\n]/).map(clean).filter(term=>{const key=term.normalize('NFKC').toLowerCase();if(!key||seen.has(key))return false;seen.add(key);return true;});
+    return String(value||'').split(/[,;\r\n]/).map(clean).filter(term=>{const key=term.normalize('NFKC').toLowerCase();if(!key||seen.has(key))return false;seen.add(key);return true;});
   }
+  // Site keywords are stored as one "a, b" string. Split before whitespace is
+  // collapsed so newline-separated keywords stay separate searches.
+  const keywordText=value=>titleTerms(value).join(', ');
+  const sameKeywords=(left,right)=>JSON.stringify(titleTerms(left))===JSON.stringify(titleTerms(right));
   function excludedTitleWord(title,terms){
     const normalized=clean(title).normalize('NFKC').toLowerCase();
     return (terms||[]).find(term=>normalized.includes(clean(term).normalize('NFKC').toLowerCase()))||'';
@@ -319,7 +334,7 @@
     return [...keys].filter(item=>!conflicts.has(item)).concat(key);
   }
   function initialState() {
-    return {version: 7, settings: {keyword: "", titleKeywords:[], excluded: [], excludedTitleTerms:[], regions: [], ...searchFilters(), autoApply: false, applyConcurrency:1, excludeAppliedCompanies: true, attachResume:false, sites: ["saramin", "jobkorea"], delay: 6}, workSummary:{startedAt:new Date().toISOString(),baselineCompletedKeys:[]}, histories: {}, jobs: [], attempts: {}, scans: {}, logs: [], run: {status: "idle"}};
+    return {version: 7, settings: {keyword: "", titleKeywords:[], excluded: [], excludedTitleTerms:[], regions: [], ...searchFilters(), autoApply: false, applyConcurrency:1, excludeAppliedCompanies: true, sites: ["saramin", "jobkorea"], delay: 6}, workSummary:{startedAt:new Date().toISOString(),baselineCompletedKeys:[]}, histories: {}, jobs: [], attempts: {}, scans: {}, logs: [], run: {status: "idle"}};
   }
-  return {sites, companyOptions, employmentOptions, regionOptions, regionGroups, detailedRegionOptions, searchFilters, searchFilterKey, filterCodes, sameCodes, normalizeRegions, searchBatchSize, searchPolicyVersion, contentProtocol, clean, normalize, companyKey, siteOf, posting, applicationPosting, applicationResult, isHistory, isSearch, searchPage, sameSearch, historyRange, identityKey, companyList, migrateState, regionKey, regionMatches, uniqueJobs, classify, guard, registeredDateText, titleTerms, excludedTitleWord, resetManualAttempts, resetWorkSummary, workCounts, groupCompanyJobs, onePerCompany, selectCompanyJob, initialState};
+  return {sites, companyOptions, employmentOptions, regionOptions, regionGroups, detailedRegionOptions, searchFilters, searchFilterKey, filterCodes, sameCodes, normalizeRegions, searchBatchSize, searchPolicyVersion, contentProtocol, clean, normalize, companyKey, siteOf, posting, applicationPosting, applicationResult, isHistory, isSearch, searchPage, sameSearch, historyRange, identityKey, companyList, migrateState, regionKey, regionMatches, uniqueJobs, classify, guard, registeredDateText, titleTerms, keywordText, sameKeywords, compactScan, excludedTitleWord, resetManualAttempts, resetWorkSummary, workCounts, groupCompanyJobs, onePerCompany, selectCompanyJob, initialState};
 });
