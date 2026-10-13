@@ -2,12 +2,12 @@
 
 사람인과 잡코리아 공고를 모으고, 설정한 조건에 맞는 기업에 등록 이력서로 지원하는 로컬 크롬 확장 프로그램입니다.
 
-현재 버전: **0.1.66**
+현재 버전: **0.1.67**
 
 ## 다운로드
 
-- [Windows 설치·업데이트 파일](https://raw.githubusercontent.com/qqhrqqhr2/ApplyMoa/master/dist/ApplyMoa-Setup-0.1.66.cmd)
-- [크롬 확장 프로그램 ZIP](https://raw.githubusercontent.com/qqhrqqhr2/ApplyMoa/master/dist/ApplyMoa-0.1.66.zip)
+- [Windows 설치·업데이트 파일](https://raw.githubusercontent.com/qqhrqqhr2/ApplyMoa/master/dist/ApplyMoa-Setup-0.1.67.cmd)
+- [크롬 확장 프로그램 ZIP](https://raw.githubusercontent.com/qqhrqqhr2/ApplyMoa/master/dist/ApplyMoa-0.1.67.zip)
 
 ## 설치와 업데이트
 

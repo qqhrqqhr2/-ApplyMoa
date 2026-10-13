@@ -2,6 +2,7 @@
 (function () {
   "use strict";
   const C = globalThis.FWA;
+  const FIRST_LOAD_TIMEOUT=20000, PAGE_READ_TIMEOUT=12000;
   class Runner {
     constructor(state, update, restoring=true) {
       this.state = state;
@@ -99,7 +100,9 @@
             const expected=new URL(expectedUrl);const actual=new URL(tab.url);
             atExpected=expected.origin===actual.origin && expected.pathname.toLowerCase().replace(/\/$/,"")===actual.pathname.toLowerCase().replace(/\/$/,"") && [...expected.searchParams].every(([key,value])=>actual.searchParams.getAll(key).includes(value));
           }
-          if(reply.ok && tab.status === "complete" && atExpected) {
+          // Search pages may keep loading ads and images long after the list is drawn.
+          const loaded=tab.status==="complete"||options.domReady&&reply.readyState&&reply.readyState!=="loading";
+          if(reply.ok && loaded && atExpected) {
             if(reply.protocolVersion!==C.contentProtocol)throw Object.assign(new Error('사이트 탭에 이전 버전이 연결되어 있습니다. 사람인·잡코리아 탭을 새로고침한 뒤 다시 실행해 주세요.'),{connectionError:true});
             // Broadcast once so content scripts in supported embedded frames announce themselves.
             chrome.tabs.sendMessage(id,{type:"FWA_COMMAND",command:"announce"}).catch(()=>{});
@@ -114,26 +117,31 @@
     async readWithin(promise,deadline) {
       let timer;
       try{return await Promise.race([promise,new Promise((_,reject)=>{
-        timer=setTimeout(()=>reject(Object.assign(new Error('페이지 로딩·연결이 5초 안에 완료되지 않았습니다.'),{retryable:true})),Math.max(0,deadline-Date.now()));
+        timer=setTimeout(()=>reject(Object.assign(new Error('페이지 로딩·연결이 제한 시간 안에 완료되지 않았습니다.'),{retryable:true})),Math.max(0,deadline-Date.now()));
       })]);}finally{clearTimeout(timer);}
     }
-    async retrySearchPage(tabId,read) {
+    // A fresh search tab opened in the background can take well over 5s to finish loading
+    // (100 postings, images, ads). Give the first load and each page read realistic limits.
+    async retrySearchPage(tabId,read,timeout=PAGE_READ_TIMEOUT) {
       for(let attempt=0;attempt<3;attempt++){
         this.check();
-        try{const deadline=Date.now()+5000;return await this.readWithin(read(deadline),deadline);}
+        try{const deadline=Date.now()+timeout;return await this.readWithin(read(deadline),deadline);}
         catch(error){
           this.check();
           const transient=error.retryable===true||/receiving end|connection|message port|could not establish/i.test(error.message||'');
           if(!transient||error.connectionError)throw error;
-          if(attempt===2)throw Object.assign(new Error(error.message+' · 5초 제한으로 2회 재시도했으나 실패했습니다. 이어서 수집할 수 있습니다.'),{retryable:true,pageRetriesExhausted:true});
-          this.log((C.sites[C.siteOf((await chrome.tabs.get(tabId)).url)]?.label||'채용사이트')+' · 페이지 로딩 재시도 '+(attempt+1)+' / 2');
-          await chrome.tabs.reload(tabId);
+          if(attempt===2)throw Object.assign(new Error(error.message+` · ${Math.round(timeout/1000)}초씩 3번 기다렸지만 실패했습니다. 사이트 탭이 열리는지 확인한 뒤 이어서 수집할 수 있습니다.`),{retryable:true,pageRetriesExhausted:true});
+          // Reloading a page that is still loading only restarts it; keep waiting instead.
+          const current=await chrome.tabs.get(tabId).catch(()=>null);
+          if(!current)throw Object.assign(new Error('수집 중인 사이트 탭이 닫혔습니다. 이어서 수집을 눌러 주세요.'),{retryable:true});
+          this.log((C.sites[C.siteOf(current.url)]?.label||'채용사이트')+' · 페이지 로딩 '+(current.status==='loading'?'대기 연장 ':'재시도 ')+(attempt+1)+' / 2');
+          if(current.status!=='loading')await chrome.tabs.reload(tabId);
         }
       }
     }
     async readSearchPage(tabId,options={}) {
       return this.retrySearchPage(tabId,async deadline=>{
-        await this.waitReady(tabId,options.expectedUrl,{deadline});
+        await this.waitReady(tabId,options.expectedUrl,{deadline,domReady:true});
         let result=options.initialResult;options.initialResult=null;
         do{
           this.check();
@@ -144,7 +152,7 @@
           result=null;
           await this.delay(Math.min(200,Math.max(0,deadline-Date.now())));
         }while(Date.now()<deadline);
-        throw Object.assign(new Error('공고 목록의 로딩이 5초 안에 완료되지 않았습니다.'),{retryable:true});
+        throw Object.assign(new Error('공고 목록의 로딩이 제한 시간 안에 완료되지 않았습니다.'),{retryable:true});
       });
     }
     async open(url,active=true) {
@@ -323,7 +331,7 @@
         meta.rowsRead ??= meta.pages?meta.jobs.length:0;
         this.state.run={status:"scanning",kind,site};
         await this.save();
-        if(kind==='search')await this.retrySearchPage(tab.id,deadline=>this.waitReady(tab.id,undefined,{deadline}));
+        if(kind==='search')await this.retrySearchPage(tab.id,deadline=>this.waitReady(tab.id,undefined,{deadline,domReady:true}),FIRST_LOAD_TIMEOUT);
         else await this.waitReady(tab.id);
         if(kind==='history'){
           const range=options.range||meta.period||C.historyRange();

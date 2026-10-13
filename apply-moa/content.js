@@ -925,7 +925,7 @@
         case "portfolioOpen": result=portfolioOpen(job); break;
         case "portfolioSelect": result=portfolioSelect(job); break;
         case "portfolioCommit": result=portfolioCommit(job); break;
-        case "ping": result = {ok:true,site,url:location.href,protocolVersion:C.contentProtocol}; break;
+        case "ping": result = {ok:true,site,url:location.href,protocolVersion:C.contentProtocol,readyState:document.readyState}; break;
         case "announce": chrome.runtime.sendMessage({type:"FWA_HELLO"}).catch(()=>{}); result={ok:true}; break;
         case "collect": result = collect(message.kind,message.filters); break;
         case "prepareSearch": result = prepareSearch(!!message.resume,message.filters); break;
