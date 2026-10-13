@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+node_modules/
+.env
+.env.*
+*.log
+지원결과_*.json
+지원기업_이력_*.json
+공고수집_*_진단.json
+지원이력_*_진단.json
+지원도우미_화면진단.json
