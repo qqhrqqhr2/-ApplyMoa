@@ -244,3 +244,26 @@ footer { margin-top: 22px; text-align: center; font-size: 12px; color: var(--mut
 .status-line .badge, .status-line .retry-job { flex-shrink: 0; margin-left: 0; }
 .status-line .job-reason { flex: 1 1 auto; min-width: 0; max-width: none; margin-left: 0; }
 .site-buttons .diagnostic-button { margin-left: auto; color: #7a8aa3; font-weight: 600; }
+
+/* 0.1.66: saved-settings summary, extra options, start hints, wrapped status reasons */
+.settings-summary { display: flex; align-items: center; gap: 16px; padding: 16px 22px; }
+.settings-summary > div { flex: 1; min-width: 0; }
+.settings-summary strong { font-size: 14px; }
+.settings-summary p { margin: 4px 0 0; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.is-collapsed-settings { display: none !important; }
+.option-row { display: flex; flex-wrap: wrap; gap: 10px 28px; margin-top: 12px; font-size: 13px; font-weight: 650; }
+.option-row small { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; font-weight: 400; }
+.settings-actions { flex-wrap: wrap; }
+.start-side { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; margin-left: auto; text-align: right; }
+.start-side + button { margin-left: 0; }
+.start-hint { color: #8a6416; font-size: 12px; }
+.start-hint:empty { display: none; }
+.daily-usage { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.daily-usage.is-full { color: #b42318; font-weight: 700; }
+.status-line { flex-wrap: wrap; row-gap: 4px; }
+.status-line .job-reason { flex-basis: 100%; order: 3; white-space: normal; overflow: visible; line-height: 1.5; }
+.table-toolbar > div select#sortOrder { width: 130px; }
+@media (max-width: 620px) {
+  .settings-summary { flex-direction: column; align-items: stretch; }
+  .start-side { align-items: stretch; text-align: left; margin-left: 0; }
+}

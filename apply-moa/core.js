@@ -189,6 +189,9 @@
       }
     }
     state.settings.titleKeywords ??= [];
+    state.settings.includeNationwide ??= true;
+    state.settings.excludeExact ??= false;
+    state.settings.dailyLimit=dailyLimitValue(state.settings.dailyLimit);
     state.settings.applyConcurrency=Math.max(1,Math.min(5,Math.floor(Number(state.settings.applyConcurrency)||1)));
     if(!state.workSummary||!Array.isArray(state.workSummary.baselineCompletedKeys))resetWorkSummary(state);
     state.version = 7;
@@ -204,10 +207,13 @@
     const mapped=clean(value).normalize("NFKC").replace(/서울특별시/g,"서울").replace(/부산광역시/g,"부산").replace(/대구광역시/g,"대구").replace(/인천광역시/g,"인천").replace(/광주광역시/g,"광주").replace(/대전광역시/g,"대전").replace(/울산광역시/g,"울산").replace(/세종특별자치시/g,"세종").replace(/경기도/g,"경기").replace(/강원특별자치도|강원도/g,"강원").replace(/충청북도/g,"충북").replace(/충청남도/g,"충남").replace(/전북특별자치도|전라북도/g,"전북").replace(/전라남도/g,"전남").replace(/경상북도/g,"경북").replace(/경상남도/g,"경남").replace(/제주특별자치도|제주도/g,"제주");
     return normalize(mapped.replace(/([가-힣]{2,})(시|군|구)(?=\s|$)/g,"$1"));
   }
-  function regionMatches(location, regions) {
+  function dailyLimitValue(value){const n=Math.floor(Number(value)||0);return n>0?Math.min(n,500):0;}
+  function regionMatches(location, regions, includeNationwide = false) {
     if (!regions || !regions.length) return true;
     if (!clean(location)) return false;
     const locations = String(location).split(/[,;|·/]|외\s*\d+\s*지역/).map(regionKey).filter(Boolean);
+    // A nationwide posting fits any chosen region when the option is on.
+    if (includeNationwide && locations.some(l => /^전국/.test(l))) return true;
     return regions.map(regionKey).filter(Boolean).some(r => locations.some(l => l.startsWith(r) || (r === "전국" && /전국/.test(l))));
   }
   function normalizeRegions(regions) {
@@ -249,7 +255,7 @@
     const normalized=clean(title).normalize('NFKC').toLowerCase();
     return (terms||[]).find(term=>normalized.includes(clean(term).normalize('NFKC').toLowerCase()))||'';
   }
-  function classify(jobs, history, excluded = [], attempts = {}, regions = [], excludeAppliedCompanies = false, onePerCompany = true, excludedTitleTerms = [], requiredTitleTerms = []) {
+  function classify(jobs, history, excluded = [], attempts = {}, regions = [], excludeAppliedCompanies = false, onePerCompany = true, excludedTitleTerms = [], requiredTitleTerms = [], options = {}) {
     const hKeys = new Set(history.map(j => j.key).filter(Boolean));
     const hIdentities = new Set(history.map(identityKey).filter(Boolean));
     const hCompanies = new Set(history.map(j=>companyKey(j.company)).filter(Boolean));
@@ -274,7 +280,7 @@
       const excludedWord=excludedTitleWord(job.title,excludedTitleTerms);
       let reason = "";
       if (!job.company || !job.title) reason = "회사·공고 확인 필요";
-      else if (excludedKeys.some(k => companyKey(job.company).includes(k))) reason = "제외 회사";
+      else if (excludedKeys.some(k => options.excludeExact ? companyKey(job.company) === k : companyKey(job.company).includes(k))) reason = "제외 회사";
       else if (excludedWord) reason = "제목 제외 단어: "+excludedWord;
       else if (requiredTitleTerms.length&&!excludedTitleWord(job.title,requiredTitleTerms)) reason = "제목에 검색어 없음";
       else if (hKeys.has(job.key) || hIdentities.has(id) || job.alreadyApplied) reason = "기존 지원";
@@ -282,7 +288,7 @@
       else if (reservedKeys.has(job.key) || reservedIds.has(id)) reason = "지원 결과 확인 필요";
       else if (reservedCompanies.has(companyKey(job.company))) reason = "기업 지원 결과 확인 필요";
       else if (regions.length && !job.location) reason = "지역 확인 필요";
-      else if (!regionMatches(job.location, regions)) reason = "설정 지역 밖";
+      else if (!regionMatches(job.location, regions, options.includeNationwide)) reason = "설정 지역 밖";
       else if (seen.has(id)) reason = "동일 회사·제목 중복";
       else if (job.external) reason = "홈페이지 지원";
       else if (job.closed) reason = "마감 공고";
@@ -306,6 +312,44 @@
   }
   function resetWorkSummary(state){
     state.workSummary={startedAt:new Date().toISOString(),baselineCompletedKeys:Object.entries(state.attempts||{}).filter(([,attempt])=>attempt.status==='completed').map(([key])=>key)};
+  }
+  // Calendar day in Korea, used for the daily application limit.
+  const seoulDay = (value = new Date()) => new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(value));
+  // Counts submit clicks made today. Keys in `pending` are counted once even before they submit.
+  function dailyUsed(state, now = new Date(), pending = new Set()) {
+    const today = seoulDay(now);
+    let used = 0;
+    for (const [key, attempt] of Object.entries(state.attempts || {})) if (!pending.has(key) && attempt?.submittedAt && seoulDay(attempt.submittedAt) === today) used++;
+    return used + pending.size;
+  }
+  // Sort key for the posting date text shown by the sites (larger = newer, -Infinity = unknown).
+  function postedSortKey(value, now = new Date()) {
+    const raw = clean(value);
+    if (!raw) return -Infinity;
+    const [y, m, d] = seoulDay(now).split('-').map(Number);
+    const today = Date.UTC(y, m - 1, d), day = 86400000;
+    let match = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (match) return Date.UTC(+match[1], match[2] - 1, +match[3]);
+    match = raw.match(/^(\d{2})-(\d{2})$/);
+    if (match) { let t = Date.UTC(y, match[1] - 1, +match[2]); if (t > today + day) t = Date.UTC(y - 1, match[1] - 1, +match[2]); return t; }
+    if (/^(?:오늘|방금)$|^\d+\s*(?:시간|분)\s*전$/.test(raw)) return today;
+    if (raw === '어제') return today - day;
+    match = raw.match(/^(\d+)\s*일\s*전$/);
+    return match ? today - match[1] * day : -Infinity;
+  }
+  function sortJobs(jobs, order = 'default', now = new Date()) {
+    if (order === 'posted') return jobs.map((job, index) => ({job, index, key: postedSortKey(job.postedDate, now)})).sort((a, b) => b.key - a.key || a.index - b.index).map(item => item.job);
+    if (order === 'company') return [...jobs].sort((a, b) => clean(a.company).replace(/주식회사|\(\s*주\s*\)|㈜/g, '').trim().localeCompare(clean(b.company).replace(/주식회사|\(\s*주\s*\)|㈜/g, '').trim(), 'ko') || clean(a.title).localeCompare(clean(b.title), 'ko'));
+    return jobs;
+  }
+  // Excel-friendly CSV: BOM for Korean, quoted fields, formula-looking cells neutralized.
+  function toCsv(rows) {
+    const cell = value => {
+      let text = value === undefined || value === null ? '' : String(value);
+      if (/^[=+\-@\t\r]/.test(text)) text = "'" + text;
+      return '"' + text.replace(/"/g, '""') + '"';
+    };
+    return '\ufeff' + rows.map(row => row.map(cell).join(',')).join('\r\n') + '\r\n';
   }
   function workCounts(state){
     const baseline=new Set(state.workSummary?.baselineCompletedKeys||[]);
@@ -334,7 +378,7 @@
     return [...keys].filter(item=>!conflicts.has(item)).concat(key);
   }
   function initialState() {
-    return {version: 7, settings: {keyword: "", titleKeywords:[], excluded: [], excludedTitleTerms:[], regions: [], ...searchFilters(), autoApply: false, applyConcurrency:1, excludeAppliedCompanies: true, sites: ["saramin", "jobkorea"], delay: 6}, workSummary:{startedAt:new Date().toISOString(),baselineCompletedKeys:[]}, histories: {}, jobs: [], attempts: {}, scans: {}, logs: [], run: {status: "idle"}};
+    return {version: 7, settings: {keyword: "", titleKeywords:[], excluded: [], excludedTitleTerms:[], regions: [], includeNationwide: true, excludeExact: false, dailyLimit: 0, ...searchFilters(), autoApply: false, applyConcurrency:1, excludeAppliedCompanies: true, sites: ["saramin", "jobkorea"], delay: 6}, workSummary:{startedAt:new Date().toISOString(),baselineCompletedKeys:[]}, histories: {}, jobs: [], attempts: {}, scans: {}, logs: [], run: {status: "idle"}};
   }
-  return {sites, companyOptions, employmentOptions, regionOptions, regionGroups, detailedRegionOptions, searchFilters, searchFilterKey, filterCodes, sameCodes, normalizeRegions, searchBatchSize, searchPolicyVersion, contentProtocol, clean, normalize, companyKey, siteOf, posting, applicationPosting, applicationResult, isHistory, isSearch, searchPage, sameSearch, historyRange, identityKey, companyList, migrateState, regionKey, regionMatches, uniqueJobs, classify, guard, registeredDateText, titleTerms, keywordText, sameKeywords, compactScan, excludedTitleWord, resetManualAttempts, resetWorkSummary, workCounts, groupCompanyJobs, onePerCompany, selectCompanyJob, initialState};
+  return {dailyLimitValue, seoulDay, dailyUsed, postedSortKey, sortJobs, toCsv, sites, companyOptions, employmentOptions, regionOptions, regionGroups, detailedRegionOptions, searchFilters, searchFilterKey, filterCodes, sameCodes, normalizeRegions, searchBatchSize, searchPolicyVersion, contentProtocol, clean, normalize, companyKey, siteOf, posting, applicationPosting, applicationResult, isHistory, isSearch, searchPage, sameSearch, historyRange, identityKey, companyList, migrateState, regionKey, regionMatches, uniqueJobs, classify, guard, registeredDateText, titleTerms, keywordText, sameKeywords, compactScan, excludedTitleWord, resetManualAttempts, resetWorkSummary, workCounts, groupCompanyJobs, onePerCompany, selectCompanyJob, initialState};
 });

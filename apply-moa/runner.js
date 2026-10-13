@@ -485,7 +485,7 @@
     jobs() {
       const jobs=this.state.jobs;
       const attempts=Object.fromEntries(Object.entries(this.state.attempts).filter(([,attempt])=>attempt.status!=='manual'));
-      return C.classify(jobs,this.history(),this.state.settings.excluded,attempts,this.state.settings.regions,true,false,this.state.settings.excludedTitleTerms,this.state.settings.titleKeywords||[]);
+      return C.classify(jobs,this.history(),this.state.settings.excluded,attempts,this.state.settings.regions,true,false,this.state.settings.excludedTitleTerms,this.state.settings.titleKeywords||[],{includeNationwide:this.state.settings.includeNationwide!==false,excludeExact:!!this.state.settings.excludeExact});
     }
     async resetManual(keys){
       if(this.active)throw new Error('진행 중인 작업을 먼저 중지해 주세요.');
@@ -510,8 +510,14 @@
       }
       return hits;
     }
+    // Daily limit applies to automatic submissions; `pending` holds jobs being processed in parallel.
+    limitReached(pending=new Set()) {
+      const limit=C.dailyLimitValue(this.state.settings.dailyLimit);
+      return !!this.state.settings.autoApply&&limit>0&&C.dailyUsed(this.state,new Date(),pending)>=limit;
+    }
+    limitMessage() {return `오늘 지원 상한 ${C.dailyLimitValue(this.state.settings.dailyLimit)}건에 도달해 멈췄습니다. 남은 공고는 내일 다시 선택하거나 상한을 바꿔 주세요.`;}
     pause(job,status,reason,tabId,canContinue=false) {
-      this.state.attempts[job.key]={job,status,reason,at:new Date().toISOString(),tabId,canContinue,applicationKey:this.state.attempts[job.key]?.applicationKey||this.applicationBindings.get(job.key)?.get(tabId)};
+      this.state.attempts[job.key]={job,status,reason,at:new Date().toISOString(),tabId,canContinue,submittedAt:this.state.attempts[job.key]?.submittedAt,applicationKey:this.state.attempts[job.key]?.applicationKey||this.applicationBindings.get(job.key)?.get(tabId)};
       this.state.run.status="paused";
       this.log(job.company+" · "+reason);
     }
@@ -694,7 +700,7 @@
       const arm=await this.command(hit.id,"arm",{job,token},hit.frameId);
       if(!arm.ok){this.pause(job,"manual",arm.reason,hit.id);return false;}
       this.check();
-      this.state.attempts[job.key]={job,status:"submitting",reason:"제출 결과 확인 중",at:new Date().toISOString(),tabId:hit.id,frameId:hit.frameId||0,token,applicationKey:this.applicationBindings.get(job.key)?.get(hit.id)};
+      this.state.attempts[job.key]={job,status:"submitting",reason:"제출 결과 확인 중",at:new Date().toISOString(),submittedAt:new Date().toISOString(),tabId:hit.id,frameId:hit.frameId||0,token,applicationKey:this.applicationBindings.get(job.key)?.get(hit.id)};
       // Commit uncertainty before the irreversible click. Never resend after message loss.
       await this.save();
       this.check();
@@ -717,7 +723,7 @@
       return false;
     }
     completed(job,reason) {
-      this.state.attempts[job.key]={job,status:"completed",reason,at:new Date().toISOString(),applicationKey:this.state.attempts[job.key]?.applicationKey};
+      this.state.attempts[job.key]={job,status:"completed",reason,at:new Date().toISOString(),submittedAt:this.state.attempts[job.key]?.submittedAt,applicationKey:this.state.attempts[job.key]?.applicationKey};
       this.log(job.company+" · 지원 완료 확인");
     }
     async startParallel(keys) {
@@ -729,7 +735,7 @@
       const limit=Math.min(queue.length,this.state.settings.applyConcurrency||1);
       const run={status:'running',parallel:true,limit,queue:queue.map(job=>job.key),index:0,tabs:[],tasks:queue.map(job=>({job,status:'waiting'}))};
       this.state.run=run;this.busy=true;this.cancelled=false;
-      let nextIndex=0;
+      let nextIndex=0;const pending=new Set();
       try{
         await this.save();
         await Promise.allSettled(Array.from({length:limit},async(_,slot)=>{
@@ -743,12 +749,13 @@
           worker.cancelled=false;worker.busy=true;
           try{
             while(nextIndex<queue.length&&!this.cancelled){
+              if(this.limitReached(pending)){if(!run.limitReached){run.limitReached=true;this.log(this.limitMessage());}break;}
               const index=nextIndex++,job=queue[index],task=run.tasks[index];
               const current=this.jobs().find(item=>item.key===job.key);
               if(!current?.eligible){task.status='skipped';task.reason=current?.reason||'지원 대상에서 제외';run.index++;await this.save();continue;}
               worker.state={...this.state,run:{status:'running',job,queue:[job.key],index:0,tabs:[]}};
               worker.applicationContext=run;
-              task.status='running';
+              task.status='running';pending.add(job.key);
               worker.save=async()=>{
                 const attempt=this.state.attempts[job.key];
                 task.status=attempt?.status||'running';task.reason=attempt?.reason||worker.state.run.reason||'지원 화면 준비 중';
@@ -763,6 +770,7 @@
                 if(attempt?.status!=='completed')worker.pause(job,['submitting','unknown'].includes(attempt?.status)?'unknown':'manual',error.message,worker.state.run.tabs?.at(-1));
                 complete=this.state.attempts[job.key]?.status==='completed';
               }
+              finally{pending.delete(job.key);}
               await worker.save();
               if(complete)for(const id of worker.state.run.tabs||[])if(worker.owned.has(id))await chrome.tabs.remove(id).catch(()=>{});
               run.index++;await this.save();
@@ -772,7 +780,8 @@
         }));
       }finally{
         this.busy=false;run.status='done';
-        run.reason=this.cancelled?'동시 지원을 중지했습니다. 남은 공고는 목록에서 다시 선택할 수 있습니다.':'동시 지원을 마쳤습니다. 직접 확인·결과 불명 공고는 개별 상태를 확인해 주세요.';
+        if(run.limitReached)for(const task of run.tasks)if(task.status==='waiting'){task.status='stopped';task.reason='하루 지원 상한 도달';}
+        run.reason=run.limitReached&&!this.cancelled?this.limitMessage():this.cancelled?'동시 지원을 중지했습니다. 남은 공고는 목록에서 다시 선택할 수 있습니다.':'동시 지원을 마쳤습니다. 직접 확인·결과 불명 공고는 개별 상태를 확인해 주세요.';
         for(const task of run.tasks)if(task.status==='running')task.status='stopped';
         this.log(run.reason);await this.save();
       }
@@ -808,6 +817,7 @@
           if(reason && reason!=="지원 결과 확인 필요") {
             this.state.attempts[key]={job,status:"skipped",reason,at:new Date().toISOString()};run.index++;continue;
           }
+          if(this.limitReached()){run.status="done";run.job=null;run.tabs=[];run.reason=this.limitMessage();this.log(run.reason);break;}
           const isResume=resume && run.job?.key===key && run.tabs?.length;
           let completed;
           completed=await this.process(job,isResume);

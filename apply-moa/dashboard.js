@@ -60,6 +60,10 @@
   $('appVersion').textContent='v'+installedVersion;
   function loadSettings(){
     $("applyConcurrency").value=String(state.settings.applyConcurrency);
+    const limit=String(C.dailyLimitValue(state.settings.dailyLimit));
+    if(![...$("dailyLimit").options].some(option=>option.value===limit))$("dailyLimit").append(Object.assign(element("option","",limit+"건"),{value:limit}));
+    $("dailyLimit").value=limit;
+    $("includeNationwide").checked=state.settings.includeNationwide!==false;$("excludeExact").checked=!!state.settings.excludeExact;
     $("titleKeywords").value=state.settings.titleKeywords.join(", ");
     $("excludedTitleTerms").value=state.settings.excludedTitleTerms.join(", ");
     $("keyword").value=state.settings.keyword;$("excluded").value=state.settings.excluded.join("\n");$("delay").value=String(state.settings.delay);$("autoApply").checked=state.settings.autoApply;$("excludeAppliedCompanies").checked=true;
@@ -109,7 +113,7 @@
   function rows(jobs){
     const query=C.normalize($("filter").value);const view=$("viewFilter").value;
     const filtered=jobs.filter(j=>!query || C.normalize(j.company+" "+j.title).includes(query)).filter(j=>view==="all" || (view==="eligible"&&j.eligible&&(!state.attempts[j.key]||state.attempts[j.key].status==='manual')) || (view==="excluded"&&!j.eligible) || (view==="results"&&!!state.attempts[j.key]));
-    const groups=C.groupCompanyJobs(filtered);
+    const groups=C.groupCompanyJobs(C.sortJobs(filtered,$("sortOrder").value));
     const totalPages=Math.max(1,Math.ceil(groups.length/C.searchBatchSize));
     jobListPage=Math.max(1,Math.min(jobListPage,totalPages));
     $("jobPageCount").textContent=`${groups.length}개 기업 · ${filtered.length}개 공고 · ${jobListPage} / ${totalPages}페이지`;
@@ -178,7 +182,16 @@
     const jobs=runner.jobs();const count=jobs.filter(j=>j.eligible && selected.has(j.key) && (!state.attempts[j.key]||state.attempts[j.key].status==='manual')).length;
     const action=state.settings.autoApply?"일괄 지원":"지원 화면 열기";
     $("start").textContent=count?`${count}개 공고 ${action}`:action;
-    $("start").disabled=settingsBusy || runner.active || dirty() || !runner.ready() || (state.settings.autoApply&&!$("consent").checked) || !count || (state.run.status==="paused" && !!state.run.queue && state.attempts[state.run.job?.key]?.status!=='manual');
+    const pausedQueue=state.run.status==="paused" && !!state.run.queue && state.attempts[state.run.job?.key]?.status!=='manual';
+    const limit=C.dailyLimitValue(state.settings.dailyLimit),used=C.dailyUsed(state),limitFull=state.settings.autoApply&&limit>0&&used>=limit;
+    // Tell the user why the button is disabled, in the order they need to fix things.
+    const missingHistory=state.settings.sites.find(site=>{const h=state.histories[site];return !(h?.status==="ready"&&h.reviewed&&h.periodVerified);});
+    const hint=settingsBusy?"설정을 저장하는 중입니다.":runner.active?"진행 중인 작업이 끝나면 지원할 수 있습니다.":dirty()?"변경한 설정을 먼저 저장해 주세요.":missingHistory?`1단계: ${C.sites[missingHistory].label} 지원 이력 수집과 확인 체크가 필요합니다.`:!runner.ready()?"2단계: 두 사이트 공고 수집을 먼저 완료해 주세요.":pausedQueue?"진행 중인 지원을 계속하거나 건너뛰어 주세요.":limitFull?"오늘 지원 상한에 도달했습니다. 상한을 바꾸거나 내일 다시 지원해 주세요.":!count?"지원할 공고를 선택해 주세요.":(state.settings.autoApply&&!$("consent").checked)?"위의 이력서 제출 확인에 체크해 주세요.":"";
+    $("startHint").textContent=hint;
+    $("start").disabled=!!hint;
+    $("dailyUsage").hidden=!state.settings.autoApply;
+    $("dailyUsage").textContent=`오늘 자동 지원 ${used}${limit?` / ${limit}`:""}건`;
+    $("dailyUsage").classList.toggle("is-full",!!limitFull);
     $("saveSettings").textContent=dirty()?"변경사항 저장":"설정 저장";
     $("consentLabel").hidden=!state.settings.autoApply;
     $("selectAll").disabled=runner.active;
@@ -187,6 +200,19 @@
     $('resetManual').textContent='직접 확인 공고 초기화'+(manualCount?' ('+manualCount+'개)':'');
     const selectable=jobs.filter(j=>j.eligible&&(!state.attempts[j.key]||state.attempts[j.key].status==='manual'));const checks=selectable.filter(j=>selected.has(j.key)).length;const companyCount=C.onePerCompany(selectable).length;
     $("selectAll").checked=selectable.length>0&&checks===companyCount;$("selectAll").indeterminate=checks>0&&checks<companyCount;
+  }
+  function renderSettingsSummary(){
+    const folded=!!state.ui.settingsCollapsed&&!!C.titleTerms(state.settings.keyword).length&&!dirty();
+    $("settingsSummary").hidden=!folded;
+    document.querySelectorAll(".settings,.preference-settings").forEach(section=>section.classList.toggle("is-collapsed-settings",folded));
+    if(!folded)return;
+    const s=state.settings,regions=s.regions.length?s.regions.join("·")+(s.includeNationwide!==false?" (전국 포함)":""):"전체 지역";
+    const parts=["검색어 "+C.titleTerms(s.keyword).join(", "),$("companyTypesSummary").textContent,$("employmentTypesSummary").textContent,regions];
+    if(s.titleKeywords.length)parts.push("제목 포함 "+s.titleKeywords.join(", "));
+    if(s.excluded.length)parts.push(`제외 기업 ${s.excluded.length}곳${s.excludeExact?" (완전 일치)":""}`);
+    if(s.excludedTitleTerms.length)parts.push("제목 제외 "+s.excludedTitleTerms.join(", "));
+    parts.push(s.autoApply?`자동지원 켜짐 · 동시 ${s.applyConcurrency}개`:"자동지원 꺼짐",`대기 ${s.delay}초`,C.dailyLimitValue(s.dailyLimit)?`하루 ${C.dailyLimitValue(s.dailyLimit)}건까지`:"하루 상한 없음");
+    $("settingsSummaryText").textContent=parts.join(" · ");
   }
   function render(){
     historyCards();historyList();
@@ -211,10 +237,10 @@
     });$("searchStatus").replaceChildren(...pills);
     const jobs=runner.jobs();
     for(const j of jobs)if(!j.eligible||(state.attempts[j.key]&&state.attempts[j.key].status!=='manual'))selected.delete(j.key);
-    const signature=JSON.stringify([jobs.map(j=>[j.key,j.reason,j.title,j.company,j.location,j.postedDate]),state.attempts,runner.active,$("filter").value,$("viewFilter").value,jobListPage]);
+    const signature=JSON.stringify([jobs.map(j=>[j.key,j.reason,j.title,j.company,j.location,j.postedDate]),state.attempts,runner.active,$("filter").value,$("viewFilter").value,$("sortOrder").value,jobListPage]);
     if(signature!==renderedJobsSignature){rows(jobs);renderedJobsSignature=signature;}
     $("totalCount").textContent=jobs.length;$("eligibleCount").textContent=jobs.filter(j=>j.eligible&&(!state.attempts[j.key]||state.attempts[j.key].status==='manual')).length;$("excludedCount").textContent=jobs.filter(j=>!j.eligible).length;const summary=C.workCounts(state);$('doneCount').textContent=summary.current;$('allDoneCount').textContent=summary.total;$('resetWorkSummary').disabled=runner.active||settingsBusy;
-    const locked=settingsBusy || runner.active || (state.run.status==="paused"&&!!state.run.queue);for(const id of ["keyword","excluded","companyTypes","employmentTypes","regions","delay","applyConcurrency","titleKeywords","excludedTitleTerms","saveSettings","scanAll"])$(id).disabled=locked;
+    const locked=settingsBusy || runner.active || (state.run.status==="paused"&&!!state.run.queue);for(const id of ["keyword","excluded","companyTypes","employmentTypes","regions","delay","applyConcurrency","titleKeywords","excludedTitleTerms","saveSettings","scanAll","dailyLimit","includeNationwide","excludeExact","editSettings"])$(id).disabled=locked;
     for(const id of ['companyTypes','employmentTypes','regions'])$(id).querySelectorAll('input').forEach(input=>input.disabled=locked);
     $("scanAll").disabled=locked || !C.clean(state.settings.keyword);
     $("scanHistoryAll").disabled=settingsBusy||!runner.canCollectHistory()||state.settings.sites.every(site=>runner.historyBusy(site));
@@ -249,6 +275,7 @@
     }
     // Avoid repeating the title as the description (e.g. "선택 목록 처리가 끝났습니다.").
     $("runReason").hidden=C.clean($("runReason").textContent)===C.clean($("runTitle").textContent);
+    renderSettingsSummary();
     const collapsed=!!state.ui.runPanelCollapsed;
     $('runPanel').classList.toggle('is-collapsed',collapsed);
     $('toggleRunPanel').textContent=collapsed?'펼치기':'접기';
@@ -259,7 +286,7 @@
     renderStart();
   }
   function download(name,data){const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:"application/json;charset=utf-8"}));const link=element("a");link.href=url;link.download=name;link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
-  function dirty(){return !C.sameKeywords($("keyword").value,state.settings.keyword) || JSON.stringify(C.companyList($("excluded").value))!==JSON.stringify(state.settings.excluded) || C.searchFilterKey(filters())!==C.searchFilterKey(state.settings) || JSON.stringify(C.normalizeRegions(values('regions')))!==JSON.stringify(state.settings.regions) || Number($("applyConcurrency").value)!==state.settings.applyConcurrency || Number($("delay").value)!==state.settings.delay || JSON.stringify(C.titleTerms($("excludedTitleTerms").value))!==JSON.stringify(state.settings.excludedTitleTerms) || JSON.stringify(C.titleTerms($("titleKeywords").value))!==JSON.stringify(state.settings.titleKeywords);}
+  function dirty(){return !C.sameKeywords($("keyword").value,state.settings.keyword) || Number($("dailyLimit").value)!==C.dailyLimitValue(state.settings.dailyLimit) || $("includeNationwide").checked!==(state.settings.includeNationwide!==false) || $("excludeExact").checked!==!!state.settings.excludeExact || JSON.stringify(C.companyList($("excluded").value))!==JSON.stringify(state.settings.excluded) || C.searchFilterKey(filters())!==C.searchFilterKey(state.settings) || JSON.stringify(C.normalizeRegions(values('regions')))!==JSON.stringify(state.settings.regions) || Number($("applyConcurrency").value)!==state.settings.applyConcurrency || Number($("delay").value)!==state.settings.delay || JSON.stringify(C.titleTerms($("excludedTitleTerms").value))!==JSON.stringify(state.settings.excludedTitleTerms) || JSON.stringify(C.titleTerms($("titleKeywords").value))!==JSON.stringify(state.settings.titleKeywords);}
   async function saveSettings(){
     if(settingsBusy||runner.active)throw new Error('현재 작업이 끝난 뒤 설정을 저장해 주세요.');
     settingsBusy=true;render();
@@ -269,9 +296,10 @@
     const keyword=keywordChanged?C.keywordText($("keyword").value):state.settings.keyword;if(!C.titleTerms(keyword).length)throw new Error("검색어를 입력해 주세요.");
     const searchChanged=keywordChanged||C.searchFilterKey(filters())!==C.searchFilterKey(state.settings);
     if(searchChanged){state.jobs=[];state.scans={};selected.clear();$("consent").checked=false;}
-    state.settings={...state.settings,...filters(),keyword,titleKeywords:C.titleTerms($("titleKeywords").value),excludedTitleTerms:C.titleTerms($("excludedTitleTerms").value),excluded:C.companyList($("excluded").value),regions:C.normalizeRegions(values('regions')),applyConcurrency:Math.max(1,Math.min(5,Number($("applyConcurrency").value)||1)),delay:Math.max(6,Number($("delay").value)||6),excludeAppliedCompanies:true};
+    state.settings={...state.settings,...filters(),keyword,titleKeywords:C.titleTerms($("titleKeywords").value),excludedTitleTerms:C.titleTerms($("excludedTitleTerms").value),excluded:C.companyList($("excluded").value),regions:C.normalizeRegions(values('regions')),applyConcurrency:Math.max(1,Math.min(5,Number($("applyConcurrency").value)||1)),delay:Math.max(6,Number($("delay").value)||6),dailyLimit:C.dailyLimitValue($("dailyLimit").value),includeNationwide:$("includeNationwide").checked,excludeExact:$("excludeExact").checked,excludeAppliedCompanies:true};
     $("excluded").value=state.settings.excluded.join("\n");
     $("excludedTitleTerms").value=state.settings.excludedTitleTerms.join(", ");
+    state.ui.settingsCollapsed=true;
     runner.log("설정을 저장했습니다.");await runner.save();
     }finally{settingsBusy=false;render();}
   }
@@ -304,6 +332,22 @@
   $("historyFilter").addEventListener("input",historyList);
   $("exportHistory").addEventListener("click",()=>download("지원기업_이력_"+new Date().toISOString().slice(0,10)+".json",{exportedAt:new Date().toISOString(),sites:Object.fromEntries(state.settings.sites.map(s=>[s,{collectedAt:state.histories[s]?.at,dateHints:state.histories[s]?.dateHints}])),jobs:C.uniqueJobs(runner.history())}));
   $("applyConcurrency").addEventListener("change",renderStart);
+  for(const id of ["dailyLimit","includeNationwide","excludeExact"])$(id).addEventListener("change",renderStart);
+  $("sortOrder").addEventListener("change",()=>{jobListPage=1;render();});
+  $("editSettings").addEventListener("click",wrap(async()=>{state.ui.settingsCollapsed=false;await runner.save();$("keyword").focus();}));
+  $("exportCsv").addEventListener("click",()=>{
+    const jobs=runner.jobs(),seen=new Set(jobs.map(job=>job.key));
+    const extra=Object.values(state.attempts).filter(attempt=>attempt.job&&!seen.has(attempt.job.key)).map(attempt=>({...attempt.job,eligible:false,reason:""}));
+    const label=status=>badge(status)[0];
+    const time=value=>value?new Date(value).toLocaleString("ko-KR",{timeZone:"Asia/Seoul"}):"";
+    const rows=[["사이트","기업","공고","지역","등록일","상태","사유","처리 시각","지원 클릭 시각","링크"]];
+    for(const job of C.sortJobs([...jobs,...extra],$("sortOrder").value)){
+      const attempt=state.attempts[job.key];
+      rows.push([C.sites[job.site]?.label||job.site,job.company,job.title,job.location,job.postedDate,attempt?label(attempt.status):job.eligible?"지원 대상":"제외",attempt?.reason||job.reason||"",time(attempt?.at),time(attempt?.submittedAt),job.url]);
+    }
+    const url=URL.createObjectURL(new Blob([C.toCsv(rows)],{type:"text/csv;charset=utf-8"}));
+    const link=element("a");link.href=url;link.download="지원결과_"+C.seoulDay()+".csv";link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+  });
   $("start").addEventListener("click",wrap(async()=>{if(state.settings.autoApply&&!$("consent").checked)throw new Error("선택한 회사에 이력서 제출을 확인해 주세요.");await runner.resetManual([...selected].filter(key=>state.attempts[key]?.status==='manual'));await runner.start([...selected]);}));
   $('verifyResult').addEventListener('click',wrap(()=>runner.verifyResult()));
   $("resume").addEventListener("click",wrap(async()=>{if(state.settings.autoApply&&!$("consent").checked)throw new Error("목록의 회사에 이력서 제출을 확인해 주세요.");await runner.start([],true);}));
