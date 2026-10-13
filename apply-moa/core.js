@@ -6,7 +6,7 @@
   "use strict";
   const searchBatchSize = 100;
   const searchPolicyVersion = 2;
-  const contentProtocol = 10;
+  const contentProtocol = 11;
   const companyOptions = [
     {key:'sme',label:'중소기업',saramin:'scale004',jobkorea:'15'},
     {key:'medium',label:'중견기업',saramin:'scale003',jobkorea:'4'},
@@ -51,7 +51,7 @@
     const codes=filterCodes(site,settings);
     const url=new URL(site==='saramin'?'https://www.saramin.co.kr/zf_user/search':'https://www.jobkorea.co.kr/Search/');
     url.searchParams.set(site==='saramin'?'searchword':'stext',keyword);
-    if(site==='saramin'){url.searchParams.set('searchType','search');url.searchParams.set('recruitPage','1');url.searchParams.set('company_cd','0,1,2,3,4,5,6,7');url.searchParams.set('recruitPageCount','100');}
+    if(site==='saramin'){url.searchParams.set('searchType','search');url.searchParams.set('recruitPage','1');url.searchParams.set('company_cd','0,1,2,3,4,5,6,7');url.searchParams.set('recruitPageCount','100');url.searchParams.set('quick_apply','y');}
     else{url.searchParams.set('tabType','recruit');url.searchParams.set('Page_No','1');url.searchParams.set('filter','2');}
     if(codes.company.length)url.searchParams.set(site==='saramin'?'company_type':'cotype',codes.company.join(','));
     if(codes.employment.length)url.searchParams.set(site==='saramin'?'job_type':'jobtype',codes.employment.join(','));

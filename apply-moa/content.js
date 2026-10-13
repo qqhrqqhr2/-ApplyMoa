@@ -419,13 +419,15 @@
     const dispatch=root?.querySelector('input.company_cd#dispatch');
     const headhunting=root?.querySelector('input.company_cd#headhunting');
     const size=root?.querySelector('.layer_filter.count li.selected button[position="recruit"]')?.getAttribute('value');
-    const company=all('input[name="company_type[]"]'),employment=all('input[name="job_type[]"]');
     const expected=C.filterCodes('saramin',searchSelection);
-    const companyReady=C.sameCodes(company.filter(e=>e.checked).map(e=>e.value),expected.company),employmentReady=C.sameCodes(employment.filter(e=>e.checked).map(e=>e.value),expected.employment);
+    // Saramin applies company_type/job_type from the address and carries them over when the
+    // list is re-queried, but no longer checks the detailed-search boxes. Trust the address.
+    const u0=new URL(location.href);
+    const companyReady=parameterMatches(u0,'company_type',expected.company),employmentReady=parameterMatches(u0,'job_type',expected.employment);
     const instant=root?.querySelector('.btn_quick_apply');
     const u=new URL(location.href);
     const parametersReady=parameterMatches(u,'company_type',expected.company)&&parameterMatches(u,'job_type',expected.employment);
-    const available=!!(general&&dispatch&&headhunting&&size&&company.length&&employment.length&&instant);
+    const available=!!(general&&dispatch&&headhunting&&size&&instant);
     return {root,general,dispatch,headhunting,instant,companyReady,employmentReady,parametersReady,instantReady:!!instant?.classList.contains('apply_on'),size:Number(size)||null,available,ready:available&&parametersReady&&companyReady&&employmentReady&&instant.classList.contains('apply_on')&&general.checked&&!dispatch.checked&&!headhunting.checked&&Number(size)===100};
   }
   function parameterMatches(url,name,expected){
