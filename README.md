@@ -2,12 +2,12 @@
 
 사람인과 잡코리아 공고를 모으고, 설정한 조건에 맞는 기업에 등록 이력서로 지원하는 로컬 크롬 확장 프로그램입니다.
 
-현재 버전: **0.1.69**
+현재 버전: **0.1.70**
 
 ## 다운로드
 
-- [Windows 설치·업데이트 파일](https://raw.githubusercontent.com/qqhrqqhr2/ApplyMoa/master/dist/ApplyMoa-Setup-0.1.69.cmd)
-- [크롬 확장 프로그램 ZIP](https://raw.githubusercontent.com/qqhrqqhr2/ApplyMoa/master/dist/ApplyMoa-0.1.69.zip)
+- [Windows 설치·업데이트 파일](https://raw.githubusercontent.com/qqhrqqhr2/ApplyMoa/master/dist/ApplyMoa-Setup-0.1.70.cmd)
+- [크롬 확장 프로그램 ZIP](https://raw.githubusercontent.com/qqhrqqhr2/ApplyMoa/master/dist/ApplyMoa-0.1.70.zip)
 
 ## 설치와 업데이트
 
@@ -36,5 +36,9 @@
 - `dist/`: 버전이 표시된 설치 파일과 배포 ZIP
 
 이력서·비밀번호·수집된 개인 지원 기록은 저장소에 포함하지 않습니다. 설정과 지원 기록은 사용자의 크롬에 저장됩니다. 유료 AI API 키는 필요하지 않습니다.
+
+## 후원
+
+모든 기능은 무료입니다. 도움이 되셨다면 [투네이션](https://toon.at/donate/qqhrqqhr2)에서 개발을 응원해 주세요. 후원은 선택이며 기능에는 차이가 없습니다.
 
 현재 동작 검증은 코드 검사와 모의 테스트를 중심으로 수행했습니다. 실제 사이트의 화면 변경에 따라 추가 확인이 필요할 수 있습니다.

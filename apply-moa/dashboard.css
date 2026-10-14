@@ -267,3 +267,13 @@ footer { margin-top: 22px; text-align: center; font-size: 12px; color: var(--mut
   .settings-summary { flex-direction: column; align-items: stretch; }
   .start-side { align-items: stretch; text-align: left; margin-left: 0; }
 }
+
+/* Optional donation box: plain link, opened only when the user clicks it. */
+.support-panel { display: flex; align-items: center; gap: 18px; padding: 16px 22px; background: #fffaf2; border-color: #f1e2c6; }
+.support-panel > div { flex: 1; min-width: 0; }
+.support-panel strong { font-size: 13px; }
+.support-panel p { margin: 4px 0 0; font-size: 12px; line-height: 1.7; }
+.support-link { flex-shrink: 0; padding: 9px 14px; border: 1px solid #ecd3a4; border-radius: 8px; background: #fff; color: #8a5a00; font-size: 13px; font-weight: 700; text-decoration: none; }
+.support-link:hover { background: #fff3dc; }
+.support-link:focus-visible { outline: 2px solid #c98a12; outline-offset: 2px; }
+@media (max-width: 620px) { .support-panel { flex-direction: column; align-items: stretch; } .support-link { text-align: center; } }
